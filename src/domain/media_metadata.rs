@@ -3,6 +3,7 @@
 use std::convert::Infallible;
 use std::str::FromStr;
 
+/// Normalized container format types relevant for compatibility checks and API responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ContainerFormat {
@@ -16,6 +17,7 @@ pub enum ContainerFormat {
     Unknown,
 }
 
+/// Normalized video codec types relevant for compatibility checks and API responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum VideoCodec {
@@ -29,6 +31,7 @@ pub enum VideoCodec {
     Unknown,
 }
 
+/// Normalized audio codec types relevant for compatibility checks and API responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AudioCodec {
@@ -42,6 +45,7 @@ pub enum AudioCodec {
     Unknown,
 }
 
+/// Compatibility classification for a media file based on its metadata, used to determine processing requirements for browser playback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormatCompatibility {
     BrowserCompatible,
@@ -49,22 +53,29 @@ pub enum FormatCompatibility {
     TranscodeRequired,
 }
 
+/// Normalized media metadata extracted from ffprobe output, used for API responses and compatibility checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaMetadata {
+    /// Normalized container format, if identified.
     pub container_format: Option<ContainerFormat>,
+    /// Normalized video codec, if identified.
     pub video_codec: Option<VideoCodec>,
+    /// Normalized audio codec, if identified.
     pub audio_codec: Option<AudioCodec>,
 }
 
 impl FormatCompatibility {
+    /// Determine if the media is natively compatible with browser playback without transformation.
     pub const fn browser_compatible(self) -> bool {
         matches!(self, Self::BrowserCompatible)
     }
 
+    /// Determine if the media is a candidate for transmuxing to achieve browser compatibility without transcoding.
     pub const fn transmux_required(self) -> bool {
         matches!(self, Self::TransmuxRequired)
     }
 
+    /// Determine if the media requires transcoding to achieve browser compatibility.
     pub const fn transcode_required(self) -> bool {
         matches!(self, Self::TranscodeRequired)
     }
@@ -85,27 +96,48 @@ impl From<MediaMetadata> for FormatCompatibility {
 }
 
 impl MediaMetadata {
+    /// Determine if the media is natively compatible with browser playback without transformation.
     fn is_browser_compatible(self) -> bool {
-        matches!(
+        let is_h264_mp4 = matches!(
             self.container_format,
             Some(ContainerFormat::Mp4 | ContainerFormat::Mov)
         ) && matches!(self.video_codec, Some(VideoCodec::H264))
-            && self.has_supported_audio()
+            && matches!(
+                self.audio_codec,
+                Some(AudioCodec::Aac | AudioCodec::Mp3) | None
+            );
+
+        let is_vp_webm = matches!(self.container_format, Some(ContainerFormat::Webm))
+            && matches!(self.video_codec, Some(VideoCodec::Vp8 | VideoCodec::Vp9))
+            && matches!(
+                self.audio_codec,
+                Some(AudioCodec::Opus | AudioCodec::Vorbis) | None
+            );
+
+        is_h264_mp4 || is_vp_webm
     }
 
+    /// Determine if the media is a candidate for transmuxing to achieve browser compatibility without transcoding.
     fn is_transmux_candidate(self) -> bool {
-        matches!(
+        let is_h264_mkv = matches!(
             self.container_format,
             Some(ContainerFormat::Matroska | ContainerFormat::Avi)
         ) && matches!(self.video_codec, Some(VideoCodec::H264))
-            && self.has_supported_audio()
-    }
+            && matches!(
+                self.audio_codec,
+                Some(AudioCodec::Aac | AudioCodec::Mp3) | None
+            );
 
-    fn has_supported_audio(self) -> bool {
-        matches!(
-            self.audio_codec,
-            Some(AudioCodec::Aac | AudioCodec::Mp3) | None
-        )
+        let is_vp_mkv = matches!(
+            self.container_format,
+            Some(ContainerFormat::Matroska | ContainerFormat::Avi)
+        ) && matches!(self.video_codec, Some(VideoCodec::Vp8 | VideoCodec::Vp9))
+            && matches!(
+                self.audio_codec,
+                Some(AudioCodec::Opus | AudioCodec::Vorbis) | None
+            );
+
+        is_h264_mkv || is_vp_mkv
     }
 }
 
