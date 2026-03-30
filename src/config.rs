@@ -1,8 +1,10 @@
 use serde::Deserialize;
+use std::net::IpAddr;
+use std::num::{NonZeroU16, NonZeroUsize};
 use thiserror::Error;
 
 /// All runtime configuration for the application.
-/// Mandatory fields have no default and will cause a panic at startup if absent.
+/// Mandatory fields have no default and will return an error at startup if absent.
 /// Optional fields fall back to the constants in the `defaults` module.
 /// Actual environment variables always take precedence over `.env` file values
 /// because `dotenvy::dotenv()` never overwrites variables that are already set.
@@ -19,19 +21,26 @@ pub struct Config {
 
     // --- optional (env overrides default) ---
     #[serde(default = "defaults::max_concurrent_transcodes")]
-    pub max_concurrent_transcodes: usize,
+    pub max_concurrent_transcodes: NonZeroUsize,
+
+    #[serde(default = "defaults::server_host")]
+    pub server_host: IpAddr,
+
+    #[serde(default = "defaults::server_port")]
+    pub server_port: NonZeroU16,
+
+    #[serde(default = "defaults::log_level")]
+    pub log_level: LogLevel,
 }
 
 impl Config {
     /// Load configuration from the process environment, loading `.env` first
-    /// (existing env vars win). Panics on any missing mandatory field or
-    /// an invalid value so startup fails loudly rather than misbehaving at
-    /// runtime.
-    pub fn from_env() -> Self {
+    /// (existing env vars win). Returns an error on any missing mandatory
+    /// field or invalid value.
+    pub fn from_env() -> Result<Self, ConfigError> {
         // Load .env but never overwrite vars already set in the environment.
         let _ = dotenvy::dotenv();
         Self::from_iter(std::env::vars())
-            .unwrap_or_else(|e| panic!("Failed to load configuration: {}", e))
     }
 
     /// Deserialise configuration from an arbitrary key-value iterator.
@@ -40,11 +49,29 @@ impl Config {
     where
         I: IntoIterator<Item = (String, String)>,
     {
-        let config: Config = envy::from_iter(vars)?;
-        if config.max_concurrent_transcodes == 0 {
-            return Err(ConfigError::ZeroTranscodes);
+        Ok(envy::from_iter(vars)?)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl LogLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
         }
-        Ok(config)
     }
 }
 
@@ -52,14 +79,26 @@ impl Config {
 pub enum ConfigError {
     #[error("configuration error: {0}")]
     Env(#[from] envy::Error),
-
-    #[error("MAX_CONCURRENT_TRANSCODES must be greater than 0")]
-    ZeroTranscodes,
 }
 
 mod defaults {
-    pub fn max_concurrent_transcodes() -> usize {
-        1
+    use super::{LogLevel, NonZeroU16, NonZeroUsize};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    pub fn max_concurrent_transcodes() -> NonZeroUsize {
+        NonZeroUsize::new(1).expect("default max_concurrent_transcodes must be non-zero")
+    }
+
+    pub fn server_host() -> IpAddr {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    }
+
+    pub fn server_port() -> NonZeroU16 {
+        NonZeroU16::new(3000).expect("default server_port must be non-zero")
+    }
+
+    pub fn log_level() -> LogLevel {
+        LogLevel::Info
     }
 }
 
@@ -92,7 +131,15 @@ mod tests {
     #[test]
     fn default_max_concurrent_transcodes_is_one() {
         let cfg = Config::from_iter(mandatory_vars()).unwrap();
-        assert_eq!(cfg.max_concurrent_transcodes, 1);
+        assert_eq!(cfg.max_concurrent_transcodes.get(), 1);
+    }
+
+    #[test]
+    fn defaults_server_host_port_and_log_level() {
+        let cfg = Config::from_iter(mandatory_vars()).unwrap();
+        assert_eq!(cfg.server_host, "0.0.0.0".parse::<IpAddr>().unwrap());
+        assert_eq!(cfg.server_port.get(), 3000);
+        assert!(matches!(cfg.log_level, LogLevel::Info));
     }
 
     #[test]
@@ -100,7 +147,19 @@ mod tests {
         let mut vars = mandatory_vars();
         vars.push(("MAX_CONCURRENT_TRANSCODES".into(), "4".into()));
         let cfg = Config::from_iter(vars).unwrap();
-        assert_eq!(cfg.max_concurrent_transcodes, 4);
+        assert_eq!(cfg.max_concurrent_transcodes.get(), 4);
+    }
+
+    #[test]
+    fn env_overrides_server_defaults() {
+        let mut vars = mandatory_vars();
+        vars.push(("SERVER_HOST".into(), "127.0.0.1".into()));
+        vars.push(("SERVER_PORT".into(), "8080".into()));
+        vars.push(("LOG_LEVEL".into(), "debug".into()));
+        let cfg = Config::from_iter(vars).unwrap();
+        assert_eq!(cfg.server_host, "127.0.0.1".parse::<IpAddr>().unwrap());
+        assert_eq!(cfg.server_port.get(), 8080);
+        assert!(matches!(cfg.log_level, LogLevel::Debug));
     }
 
     #[test]
@@ -117,16 +176,20 @@ mod tests {
     fn zero_transcodes_returns_error() {
         let mut vars = mandatory_vars();
         vars.push(("MAX_CONCURRENT_TRANSCODES".into(), "0".into()));
-        assert!(matches!(
-            Config::from_iter(vars),
-            Err(ConfigError::ZeroTranscodes)
-        ));
+        assert!(matches!(Config::from_iter(vars), Err(ConfigError::Env(_))));
     }
 
     #[test]
     fn non_numeric_transcodes_returns_error() {
         let mut vars = mandatory_vars();
         vars.push(("MAX_CONCURRENT_TRANSCODES".into(), "abc".into()));
+        assert!(matches!(Config::from_iter(vars), Err(ConfigError::Env(_))));
+    }
+
+    #[test]
+    fn zero_server_port_returns_error() {
+        let mut vars = mandatory_vars();
+        vars.push(("SERVER_PORT".into(), "0".into()));
         assert!(matches!(Config::from_iter(vars), Err(ConfigError::Env(_))));
     }
 }
