@@ -1,11 +1,12 @@
 //! Domain types for upload size validation.
 
 use crate::config::Config;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use thiserror::Error;
 
 /// Strongly typed upload size value in bytes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(try_from = "i64")]
 pub struct UploadSizeBytes(u64);
 
 /// Maximum allowed upload size in bytes.
@@ -22,15 +23,6 @@ pub enum UploadSizeError {
     ExceedsLimit,
 }
 
-impl UploadSizeBytes {
-    fn ensure_within_limit(self, max_upload_bytes: MaxUploadBytes) -> Result<Self, UploadSizeError> {
-        if self.0 > max_upload_bytes.0 {
-            return Err(UploadSizeError::ExceedsLimit);
-        }
-
-        Ok(self)
-    }
-}
 
 impl Default for UploadSizeBytes {
     fn default() -> Self {
@@ -42,8 +34,18 @@ impl TryFrom<Option<i64>> for UploadSizeBytes {
     type Error = UploadSizeError;
 
     fn try_from(raw_size_bytes: Option<i64>) -> Result<Self, Self::Error> {
-        let raw = raw_size_bytes.unwrap_or(0);
-        let value = u64::try_from(raw).map_err(|_| UploadSizeError::Negative)?;
+        match raw_size_bytes {
+            Some(raw) => Self::try_from(raw),
+            None => Ok(Self::default()),
+        }
+    }
+}
+
+impl TryFrom<i64> for UploadSizeBytes {
+    type Error = UploadSizeError;
+
+    fn try_from(raw_size_bytes: i64) -> Result<Self, Self::Error> {
+        let value = u64::try_from(raw_size_bytes).map_err(|_| UploadSizeError::Negative)?;
         Ok(Self(value))
     }
 }
@@ -53,7 +55,13 @@ impl TryFrom<(Option<i64>, MaxUploadBytes)> for UploadSizeBytes {
 
     fn try_from(value: (Option<i64>, MaxUploadBytes)) -> Result<Self, Self::Error> {
         let (raw_size_bytes, max_upload_bytes) = value;
-        Self::try_from(raw_size_bytes)?.ensure_within_limit(max_upload_bytes)
+        let size_bytes = Self::try_from(raw_size_bytes)?;
+
+        if size_bytes.0 > max_upload_bytes.0 {
+            return Err(UploadSizeError::ExceedsLimit);
+        }
+
+        Ok(size_bytes)
     }
 }
 
@@ -62,23 +70,18 @@ impl TryFrom<(UploadSizeBytes, MaxUploadBytes)> for UploadSizeBytes {
 
     fn try_from(value: (UploadSizeBytes, MaxUploadBytes)) -> Result<Self, Self::Error> {
         let (size_bytes, max_upload_bytes) = value;
-        size_bytes.ensure_within_limit(max_upload_bytes)
+
+        if size_bytes.0 > max_upload_bytes.0 {
+            return Err(UploadSizeError::ExceedsLimit);
+        }
+
+        Ok(size_bytes)
     }
 }
 
 impl From<&Config> for MaxUploadBytes {
     fn from(config: &Config) -> Self {
         Self(config.max_upload_bytes.get())
-    }
-}
-
-impl<'de> Deserialize<'de> for UploadSizeBytes {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = i64::deserialize(deserializer)?;
-        Self::try_from(Some(raw)).map_err(serde::de::Error::custom)
     }
 }
 

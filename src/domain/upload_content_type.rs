@@ -4,11 +4,12 @@ use std::ops::Deref;
 use std::str::FromStr;
 
 use mime::Mime;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use thiserror::Error;
 
 /// Strongly typed content type value for uploads.
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "String")]
 pub struct UploadContentType(Mime);
 
 /// Validation errors when parsing upload content type input.
@@ -56,13 +57,11 @@ impl TryFrom<Option<String>> for UploadContentType {
     }
 }
 
-impl<'de> Deserialize<'de> for UploadContentType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)?;
-        Self::from_str(&raw).map_err(serde::de::Error::custom)
+impl TryFrom<String> for UploadContentType {
+    type Error = UploadContentTypeError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_str(&value)
     }
 }
 
