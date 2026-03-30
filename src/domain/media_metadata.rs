@@ -229,6 +229,90 @@ mod tests {
     }
 
     #[test]
+    fn browser_compatible_webm_vp9_opus() {
+        let c = FormatCompatibility::from(MediaMetadata {
+            container_format: Some(ContainerFormat::Webm),
+            video_codec: Some(VideoCodec::Vp9),
+            audio_codec: Some(AudioCodec::Opus),
+        });
+
+        assert_eq!(c, FormatCompatibility::BrowserCompatible);
+        assert!(c.browser_compatible());
+        assert!(!c.transmux_required());
+        assert!(!c.transcode_required());
+    }
+
+    #[test]
+    fn browser_compatible_webm_vp8_vorbis() {
+        let c = FormatCompatibility::from(MediaMetadata {
+            container_format: Some(ContainerFormat::Webm),
+            video_codec: Some(VideoCodec::Vp8),
+            audio_codec: Some(AudioCodec::Vorbis),
+        });
+
+        assert_eq!(c, FormatCompatibility::BrowserCompatible);
+        assert!(c.browser_compatible());
+        assert!(!c.transmux_required());
+        assert!(!c.transcode_required());
+    }
+
+    #[test]
+    fn transmux_candidate_avi_h264_mp3() {
+        let c = FormatCompatibility::from(MediaMetadata {
+            container_format: Some(ContainerFormat::Avi),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: Some(AudioCodec::Mp3),
+        });
+
+        assert_eq!(c, FormatCompatibility::TransmuxRequired);
+        assert!(!c.browser_compatible());
+        assert!(c.transmux_required());
+        assert!(!c.transcode_required());
+    }
+
+    #[test]
+    fn transmux_candidate_mkv_vp9_vorbis() {
+        let c = FormatCompatibility::from(MediaMetadata {
+            container_format: Some(ContainerFormat::Matroska),
+            video_codec: Some(VideoCodec::Vp9),
+            audio_codec: Some(AudioCodec::Vorbis),
+        });
+
+        assert_eq!(c, FormatCompatibility::TransmuxRequired);
+        assert!(!c.browser_compatible());
+        assert!(c.transmux_required());
+        assert!(!c.transcode_required());
+    }
+
+    #[test]
+    fn transmux_candidate_mkv_h264_no_audio() {
+        let c = FormatCompatibility::from(MediaMetadata {
+            container_format: Some(ContainerFormat::Matroska),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: None,
+        });
+
+        assert_eq!(c, FormatCompatibility::TransmuxRequired);
+        assert!(!c.browser_compatible());
+        assert!(c.transmux_required());
+        assert!(!c.transcode_required());
+    }
+
+    #[test]
+    fn transmux_candidate_avi_h264_no_audio() {
+        let c = FormatCompatibility::from(MediaMetadata {
+            container_format: Some(ContainerFormat::Avi),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: None,
+        });
+
+        assert_eq!(c, FormatCompatibility::TransmuxRequired);
+        assert!(!c.browser_compatible());
+        assert!(c.transmux_required());
+        assert!(!c.transcode_required());
+    }
+
+    #[test]
     fn transmux_candidate_mkv_h264_aac() {
         let c = FormatCompatibility::from(MediaMetadata {
             container_format: Some(ContainerFormat::Matroska),
