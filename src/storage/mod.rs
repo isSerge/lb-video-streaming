@@ -1,10 +1,17 @@
+pub mod port;
+
+pub use port::Storage;
+
 use aws_credential_types::Credentials;
-use aws_sdk_s3::{config::Region, presigning::PresigningConfig, Client};
+use aws_sdk_s3::{Client, config::Region, presigning::PresigningConfig};
 use std::time::Duration;
 use thiserror::Error;
 use url::{ParseError, Url};
 
-use crate::{config::Config, domain::{RawUploadKey, UploadContentType}};
+use crate::{
+    config::Config,
+    domain::{RawUploadKey, UploadContentType},
+};
 
 /// Holds storage resources for interacting with Cloudflare R2.
 pub struct R2Storage {
@@ -33,16 +40,13 @@ impl R2Storage {
     /// virtual-hosted-style requires per-bucket DNS which is not available on the
     /// free `.r2.dev` plan.
     pub fn new(config: &Config) -> Self {
-        let endpoint_url = format!(
-            "https://{}.r2.cloudflarestorage.com",
-            config.r2_account_id
-        );
+        let endpoint_url = format!("https://{}.r2.cloudflarestorage.com", config.r2_account_id);
 
         let credentials = Credentials::new(
             &config.r2_access_key_id,
             &config.r2_secret_access_key,
-            None, // session token — not used with R2 static keys
-            None, // expiry
+            None,
+            None,
             "r2",
         );
 
@@ -60,14 +64,18 @@ impl R2Storage {
         }
     }
 
-    /// Create a presigned PUT URL for uploading a raw object.
-    pub async fn create_upload_url(
+}
+
+#[async_trait::async_trait]
+impl Storage for R2Storage {
+    async fn create_upload_url(
         &self,
         key: &RawUploadKey,
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError> {
-        let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(self.upload_url_ttl_secs))
-            .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
+        let presign_cfg =
+            PresigningConfig::expires_in(Duration::from_secs(self.upload_url_ttl_secs))
+                .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
 
         let presigned = self
             .client

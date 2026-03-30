@@ -114,6 +114,10 @@ mod tests {
     #[test]
     fn rejects_invalid_mime_type_during_deserialize() {
         let error = serde_json::from_str::<UploadContentType>("\"not-a-mime\"").unwrap_err();
-        assert!(error.to_string().contains("content_type must be a valid MIME type"));
+        assert!(
+            error
+                .to_string()
+                .contains("content_type must be a valid MIME type")
+        );
     }
 }

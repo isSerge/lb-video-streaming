@@ -61,7 +61,11 @@ impl Config {
 
     /// Build a public CDN URL for an object key.
     pub fn public_object_url(&self, key: &str) -> Result<Url, url::ParseError> {
-        Url::parse(&format!("{}/{}", self.public_cdn_domain.trim_end_matches('/'), key))
+        Url::parse(&format!(
+            "{}/{}",
+            self.public_cdn_domain.trim_end_matches('/'),
+            key
+        ))
     }
 }
 
@@ -236,7 +240,9 @@ mod tests {
     #[test]
     fn public_object_url_builds_valid_url_and_trims_trailing_slash() {
         let cfg = Config::from_iter(mandatory_vars()).unwrap();
-        let url = cfg.public_object_url("raw/01ARZ3NDEKTSV4RRFFQ69G5FAV/video").unwrap();
+        let url = cfg
+            .public_object_url("raw/01ARZ3NDEKTSV4RRFFQ69G5FAV/video")
+            .unwrap();
 
         assert_eq!(
             url.as_str(),

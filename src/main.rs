@@ -1,12 +1,15 @@
 mod api;
 mod config;
 mod domain;
-mod ffprobe;
-mod r2_storage;
-mod video_repository;
+mod media_probe;
+mod repository;
+mod storage;
 
 use config::Config;
+use media_probe::{Ffprobe, MediaProbe};
+use repository::{PgVideoRepository, VideoRepository};
 use std::sync::Arc;
+use storage::{R2Storage, Storage};
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
 
@@ -24,22 +27,21 @@ async fn main() -> Result<(), AppError> {
 
     tracing::info!(cdn_domain = %config.public_cdn_domain, "configuration loaded");
 
-    let video_repository = video_repository::VideoRepository::new(&config).await?;
+    let video_repository = PgVideoRepository::new(&config).await?;
     tracing::info!("database connected and migrations applied");
 
-    let r2_storage = r2_storage::R2Storage::new(&config);
+    let r2_storage = R2Storage::new(&config);
     tracing::info!(bucket = %config.r2_bucket_name, "R2 storage client ready");
 
-    let ffprobe = ffprobe::Ffprobe::default();
+    let ffprobe = Ffprobe::default();
 
     let bind_addr = format!("{}:{}", config.server_host, config.server_port.get());
 
-    let state = api::AppState::new(
-        Arc::new(video_repository),
-        Arc::new(r2_storage),
-        Arc::new(ffprobe),
-        Arc::new(config),
-    );
+    let video_repository: Arc<dyn VideoRepository> = Arc::new(video_repository);
+    let storage: Arc<dyn Storage> = Arc::new(r2_storage);
+    let media_probe: Arc<dyn MediaProbe> = Arc::new(ffprobe);
+
+    let state = api::AppState::new(video_repository, storage, media_probe, Arc::new(config));
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 

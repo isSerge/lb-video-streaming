@@ -2,21 +2,18 @@
 
 use std::num::NonZeroU64;
 
-use axum::{extract::{Json, State}, http::StatusCode};
+use axum::{
+    extract::{Json, State},
+    http::StatusCode,
+};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 use url::Url;
 
 use super::{errors::ApiError, state::AppState};
 use crate::domain::{
-    FormatCompatibility,
-    MaxUploadBytes,
-    MediaMetadata,
-    RawUploadKey,
-    UploadCompletePath,
-    UploadContentType,
-    UploadSizeBytes,
-    VideoMetadataPath,
+    FormatCompatibility, MaxUploadBytes, MediaMetadata, RawUploadKey, UploadCompletePath,
+    UploadContentType, UploadSizeBytes, VideoMetadataPath,
 };
 
 /// Input payload for requesting a presigned upload URL.
@@ -56,7 +53,7 @@ pub async fn create_upload_url(
         .await?;
 
     let upload_url = state
-        .r2_storage
+        .storage
         .create_upload_url(&raw_key, &content_type)
         .await?;
 
@@ -81,7 +78,7 @@ pub async fn mark_upload_complete(
         .ok_or(ApiError::NotFound)?;
 
     let raw_url = state.config.public_object_url(&row.raw_key)?;
-    let metadata = state.ffprobe.probe_url(&raw_url).await?;
+    let metadata = state.media_probe.probe_url(&raw_url).await?;
 
     tracing::info!(
         %ulid,
@@ -115,10 +112,8 @@ mod tests {
 
     #[test]
     fn request_deserialize_accepts_valid_typed_fields() {
-        let req: UploadUrlRequest = serde_json::from_str(
-            r#"{"content_type":"video/mp4","size_bytes":123}"#,
-        )
-        .unwrap();
+        let req: UploadUrlRequest =
+            serde_json::from_str(r#"{"content_type":"video/mp4","size_bytes":123}"#).unwrap();
 
         assert_eq!(&*req.content_type.unwrap(), "video/mp4");
         assert_eq!(i64::from(req.size_bytes.unwrap()), 123);
@@ -138,7 +133,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("content_type must be a valid MIME type"));
+        assert!(
+            error
+                .to_string()
+                .contains("content_type must be a valid MIME type")
+        );
     }
 
     #[test]
@@ -148,8 +147,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("size_bytes must be greater than or equal to 0"));
+        assert!(
+            error
+                .to_string()
+                .contains("size_bytes must be greater than or equal to 0")
+        );
     }
 }

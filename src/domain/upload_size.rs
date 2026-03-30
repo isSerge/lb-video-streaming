@@ -23,7 +23,6 @@ pub enum UploadSizeError {
     ExceedsLimit,
 }
 
-
 impl Default for UploadSizeBytes {
     fn default() -> Self {
         Self(0)
@@ -162,7 +161,11 @@ mod tests {
     #[test]
     fn rejects_negative_integer_during_deserialize() {
         let error = serde_json::from_str::<UploadSizeBytes>("-1").unwrap_err();
-        assert!(error.to_string().contains("size_bytes must be greater than or equal to 0"));
+        assert!(
+            error
+                .to_string()
+                .contains("size_bytes must be greater than or equal to 0")
+        );
     }
 
     #[test]

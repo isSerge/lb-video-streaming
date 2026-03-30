@@ -1,5 +1,6 @@
-//! Async ffprobe wrapper for media metadata probing over HTTP URLs.
-//! TODO: explain why ffprobe wrapper instead of alternatives
+pub mod port;
+
+pub use port::MediaProbe;
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -23,24 +24,6 @@ impl Ffprobe {
         }
     }
 
-    /// Probe media metadata from a URL and return normalized fields used by the API.
-    pub async fn probe_url(&self, url: &Url) -> Result<ProbedMediaMetadata, FfprobeError> {
-        let output = Command::new(&self.command)
-            .args(Self::args(url))
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(FfprobeError::NonZeroExit {
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            });
-        }
-
-        let parsed: FfprobeOutput = serde_json::from_slice(&output.stdout)?;
-        Ok(parsed.into())
-    }
-
     /// Build ffprobe command-line arguments for probing a URL with JSON output.
     fn args(url: &Url) -> Vec<String> {
         vec![
@@ -58,6 +41,26 @@ impl Ffprobe {
 impl Default for Ffprobe {
     fn default() -> Self {
         Self::new("ffprobe")
+    }
+}
+
+#[async_trait::async_trait]
+impl MediaProbe for Ffprobe {
+    async fn probe_url(&self, url: &Url) -> Result<ProbedMediaMetadata, FfprobeError> {
+        let output = Command::new(&self.command)
+            .args(Self::args(url))
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Err(FfprobeError::NonZeroExit {
+                code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+
+        let parsed: FfprobeOutput = serde_json::from_slice(&output.stdout)?;
+        Ok(parsed.into())
     }
 }
 
@@ -113,12 +116,7 @@ impl From<FfprobeOutput> for ProbedMediaMetadata {
             output
                 .streams
                 .iter()
-                .find(|s| {
-                    matches!(
-                        s.codec_type.as_ref(),
-                        Some(t) if *t == codec_type
-                    )
-                })
+                .find(|s| matches!(s.codec_type.as_ref(), Some(t) if *t == codec_type))
                 .and_then(|s| s.codec_name.as_deref())
         };
 
@@ -162,8 +160,8 @@ mod tests {
 
     #[test]
     fn builds_expected_ffprobe_args() {
-        let url = Url::parse("https://cdn.example.com/raw/01ARZ3NDEKTSV4RRFFQ69G5FAV/video")
-            .unwrap();
+        let url =
+            Url::parse("https://cdn.example.com/raw/01ARZ3NDEKTSV4RRFFQ69G5FAV/video").unwrap();
 
         let args = Ffprobe::args(&url);
         assert_eq!(

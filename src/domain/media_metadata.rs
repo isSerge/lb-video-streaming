@@ -86,19 +86,26 @@ impl From<MediaMetadata> for FormatCompatibility {
 
 impl MediaMetadata {
     fn is_browser_compatible(self) -> bool {
-        matches!(self.container_format, Some(ContainerFormat::Mp4 | ContainerFormat::Mov))
-            && matches!(self.video_codec, Some(VideoCodec::H264))
+        matches!(
+            self.container_format,
+            Some(ContainerFormat::Mp4 | ContainerFormat::Mov)
+        ) && matches!(self.video_codec, Some(VideoCodec::H264))
             && self.has_supported_audio()
     }
 
     fn is_transmux_candidate(self) -> bool {
-        matches!(self.container_format, Some(ContainerFormat::Matroska | ContainerFormat::Avi))
-            && matches!(self.video_codec, Some(VideoCodec::H264))
+        matches!(
+            self.container_format,
+            Some(ContainerFormat::Matroska | ContainerFormat::Avi)
+        ) && matches!(self.video_codec, Some(VideoCodec::H264))
             && self.has_supported_audio()
     }
 
     fn has_supported_audio(self) -> bool {
-        matches!(self.audio_codec, Some(AudioCodec::Aac | AudioCodec::Mp3) | None)
+        matches!(
+            self.audio_codec,
+            Some(AudioCodec::Aac | AudioCodec::Mp3) | None
+        )
     }
 }
 

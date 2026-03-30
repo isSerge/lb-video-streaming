@@ -1,14 +1,14 @@
 //! API error definitions and HTTP response mapping.
 
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 use thiserror::Error;
 use url::ParseError;
 
 use crate::{
     domain::{UploadContentTypeError, UploadSizeError, VideoStatusError},
-    ffprobe::FfprobeError,
-    r2_storage::R2StorageError,
+    media_probe::FfprobeError,
+    storage::R2StorageError,
 };
 
 #[derive(Debug, Serialize)]
@@ -53,9 +53,7 @@ impl IntoResponse for ApiError {
             | Self::VideoStatus(_)
             | Self::UrlParse(_)
             | Self::R2Storage(_)
-            | Self::Ffprobe(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            | Self::Ffprobe(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let body = Json(ErrorResponse {

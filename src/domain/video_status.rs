@@ -127,7 +127,10 @@ pub mod typestate {
 
 #[cfg(test)]
 mod tests {
-    use super::{typestate::{PendingUpload, VideoState}, VideoStatus, VideoStatusError};
+    use super::{
+        VideoStatus, VideoStatusError,
+        typestate::{PendingUpload, VideoState},
+    };
 
     #[test]
     fn parses_pending_upload_status() {
@@ -195,6 +198,9 @@ mod tests {
             .fail();
 
         assert!(matches!(failed_from_uploaded.status(), VideoStatus::Failed));
-        assert!(matches!(failed_from_transmuxing.status(), VideoStatus::Failed));
+        assert!(matches!(
+            failed_from_transmuxing.status(),
+            VideoStatus::Failed
+        ));
     }
 }
