@@ -9,7 +9,9 @@ use url::Url;
 
 use super::{errors::ApiError, state::AppState};
 use crate::domain::{
+    FormatCompatibility,
     MaxUploadBytes,
+    MediaMetadata,
     RawUploadKey,
     UploadCompletePath,
     UploadContentType,
@@ -90,7 +92,16 @@ pub async fn mark_upload_complete(
         "ffprobe metadata extracted"
     );
 
-    let found = state.video_repository.mark_uploaded(ulid).await?;
+    let compatibility = FormatCompatibility::from(MediaMetadata {
+        container_format: metadata.container_format,
+        video_codec: metadata.video_codec,
+        audio_codec: metadata.audio_codec,
+    });
+
+    let found = state
+        .video_repository
+        .mark_uploaded_with_compatibility(ulid, compatibility)
+        .await?;
     if !found {
         return Err(ApiError::NotFound);
     }

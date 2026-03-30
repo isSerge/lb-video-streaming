@@ -3,7 +3,7 @@ use ulid::Ulid;
 
 use crate::{
     config::Config,
-    domain::{ManifestKey, RawUploadKey, TransmuxKey, UploadContentType},
+    domain::{FormatCompatibility, ManifestKey, RawUploadKey, TransmuxKey, UploadContentType},
 };
 
 #[derive(Debug)]
@@ -54,14 +54,24 @@ impl VideoRepository {
         Ok(())
     }
 
-    /// Mark an existing video as `uploaded` once the client confirms upload completion.
+    /// Mark an existing video as `uploaded` and persist format compatibility flags.
     ///
     /// Returns `true` when a row was updated and `false` when no video matched the ULID.
-    pub async fn mark_uploaded(&self, ulid: Ulid) -> Result<bool, sqlx::Error> {
+    pub async fn mark_uploaded_with_compatibility(
+        &self,
+        ulid: Ulid,
+        compatibility: FormatCompatibility,
+    ) -> Result<bool, sqlx::Error> {
         let ulid = ulid.to_string();
-        let result = sqlx::query!("UPDATE videos SET status = 'uploaded' WHERE ulid = $1", &ulid)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query!(
+            "UPDATE videos SET status = 'uploaded', browser_compatible = $2, transmux_required = $3, transcode_required = $4 WHERE ulid = $1",
+            &ulid,
+            compatibility.browser_compatible(),
+            compatibility.transmux_required(),
+            compatibility.transcode_required(),
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -113,7 +123,7 @@ mod tests {
     use std::str::FromStr;
     use ulid::Ulid;
 
-    use crate::domain::{RawUploadKey, UploadContentType};
+    use crate::domain::{FormatCompatibility, RawUploadKey, UploadContentType};
 
     fn ulid(value: &str) -> Ulid {
         value.parse::<Ulid>().expect("valid ulid literal")
@@ -187,7 +197,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn mark_uploaded_updates_status(pool: PgPool) {
+    async fn mark_uploaded_with_compatibility_updates_status(pool: PgPool) {
         let repository = VideoRepository::with_pool(pool);
         let ulid = ulid("01ARZ3NDEKTSV4RRFFQ69G5FB0");
 
@@ -201,7 +211,13 @@ mod tests {
             .await
             .unwrap();
 
-        let updated = repository.mark_uploaded(ulid).await.unwrap();
+        let updated = repository
+            .mark_uploaded_with_compatibility(
+                ulid,
+                FormatCompatibility::TranscodeRequired,
+            )
+            .await
+            .unwrap();
         assert!(updated);
 
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
@@ -209,14 +225,48 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn mark_uploaded_returns_false_when_missing(pool: PgPool) {
+    async fn mark_uploaded_with_compatibility_returns_false_when_missing(pool: PgPool) {
         let repository = VideoRepository::with_pool(pool);
         let updated = repository
-            .mark_uploaded(ulid("01ARZ3NDEKTSV4RRFFQ69G5FB1"))
+            .mark_uploaded_with_compatibility(
+                ulid("01ARZ3NDEKTSV4RRFFQ69G5FB1"),
+                FormatCompatibility::TranscodeRequired,
+            )
             .await
             .unwrap();
 
         assert!(!updated);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn mark_uploaded_with_compatibility_updates_status_and_flags(pool: PgPool) {
+        let repository = VideoRepository::with_pool(pool);
+        let ulid = ulid("01ARZ3NDEKTSV4RRFFQ69G5FB3");
+
+        repository
+            .create_pending_video(
+                ulid,
+                &raw_key(ulid),
+                &content_type("video/mp4"),
+                321,
+            )
+            .await
+            .unwrap();
+
+        let updated = repository
+            .mark_uploaded_with_compatibility(
+                ulid,
+                FormatCompatibility::BrowserCompatible,
+            )
+            .await
+            .unwrap();
+        assert!(updated);
+
+        let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
+        assert_eq!(found.status, "uploaded");
+        assert!(found.browser_compatible);
+        assert!(!found.transmux_required);
+        assert!(!found.transcode_required);
     }
 
     #[sqlx::test(migrations = "./migrations")]
