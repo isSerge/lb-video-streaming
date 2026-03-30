@@ -99,6 +99,7 @@ struct FfprobeFormat {
     _format_long_name: Option<String>,
 }
 
+/// Normalized media metadata extracted from ffprobe output, used by the API.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ProbedMediaMetadata {
     pub container_format: Option<ContainerFormat>,
@@ -108,10 +109,12 @@ pub struct ProbedMediaMetadata {
 
 impl From<FfprobeOutput> for ProbedMediaMetadata {
     fn from(output: FfprobeOutput) -> Self {
+        // Helper to trim and filter out empty codec names
         fn normalized<'a>(value: Option<&'a str>) -> Option<&'a str> {
             value.map(str::trim).filter(|name| !name.is_empty())
         }
 
+        // Extract codec names for video and audio streams, if present
         let codec_for = |codec_type: FfprobeCodecType| {
             output
                 .streams
@@ -120,15 +123,26 @@ impl From<FfprobeOutput> for ProbedMediaMetadata {
                 .and_then(|s| s.codec_name.as_deref())
         };
 
-        let container_format = normalized(
-            output
-                .format
-                .as_ref()
-                .and_then(|f| f.format_name.as_deref())
-                .and_then(|formats| formats.split(',').next()),
-        )
-        .map(ContainerFormat::from);
+        // Extract container format, preferring web-friendly formats if multiple are listed
+        let container_format = output
+            .format
+            .as_ref()
+            .and_then(|f| f.format_name.as_deref())
+            .map(|formats| {
+                let parts: Vec<&str> = formats.split(',').collect();
+                // Prefer specific web-friendly containers if they are in the list
+                if parts.contains(&"webm") {
+                    return ContainerFormat::Webm;
+                }
+                if parts.contains(&"mp4") {
+                    return ContainerFormat::Mp4;
+                }
+                // Otherwise grab the first one
+                parts.first().copied().unwrap_or("").trim().into()
+            })
+            .filter(|f| *f != ContainerFormat::Unknown);
 
+        // Extract and normalize codec names for video and audio streams
         let video_codec = normalized(codec_for(FfprobeCodecType::Video)).map(VideoCodec::from);
         let audio_codec = normalized(codec_for(FfprobeCodecType::Audio)).map(AudioCodec::from);
 
@@ -140,6 +154,7 @@ impl From<FfprobeOutput> for ProbedMediaMetadata {
     }
 }
 
+/// Errors that can occur during ffprobe execution and parsing.
 #[derive(Debug, Error)]
 pub enum FfprobeError {
     #[error("failed to spawn ffprobe: {0}")]
@@ -220,29 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn metadata_from_output_extracts_container_and_codecs() {
-        let raw = r#"
-        {
-            "streams": [
-                { "codec_type": "video", "codec_name": "h264" },
-                { "codec_type": "audio", "codec_name": "aac" }
-            ],
-            "format": {
-                "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
-                "format_long_name": "QuickTime / MOV"
-            }
-        }
-        "#;
-
-        let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
-        let metadata = ProbedMediaMetadata::from(output);
-
-        assert_eq!(metadata.container_format, Some(ContainerFormat::Mov));
-        assert_eq!(metadata.video_codec, Some(VideoCodec::H264));
-        assert_eq!(metadata.audio_codec, Some(AudioCodec::Aac));
-    }
-
-    #[test]
     fn metadata_from_output_handles_missing_fields() {
         let raw = r#"{ "streams": [{ "codec_type": "video" }], "format": null }"#;
         let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
@@ -251,5 +243,70 @@ mod tests {
         assert_eq!(metadata.container_format, None);
         assert_eq!(metadata.video_codec, None);
         assert_eq!(metadata.audio_codec, None);
+    }
+
+    #[test]
+    fn metadata_from_output_filters_empty_codec_names() {
+        let raw = r#"
+        {
+            "streams": [
+                { "codec_type": "video", "codec_name": "   " },
+                { "codec_type": "audio", "codec_name": "" }
+            ],
+            "format": {
+                "format_name": "mp4",
+                "format_long_name": "MP4 format"
+            }
+        }
+        "#;
+
+        let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
+        let metadata = ProbedMediaMetadata::from(output);
+
+        assert_eq!(metadata.container_format, Some(ContainerFormat::Mp4));
+        assert_eq!(metadata.video_codec, None);
+        assert_eq!(metadata.audio_codec, None);
+    }
+
+    #[test]
+    fn metadata_from_output_prefers_web_friendly_containers() {
+        let raw = r#"
+        {
+            "streams": [],
+            "format": {
+                "format_name": "mp4,webm",
+                "format_long_name": "MP4 and WebM formats"
+            }
+        }
+        "#;
+
+        let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
+        let metadata = ProbedMediaMetadata::from(output);
+
+        // Should prefer WebM over MP4 if both are listed
+        assert_eq!(metadata.container_format, Some(ContainerFormat::Webm));
+    }
+
+    #[test]
+    fn metadata_from_output_extracts_container_and_codecs_if_web_unfriendly() {
+        let raw = r#"
+        {
+            "streams": [
+                { "codec_type": "video", "codec_name": "h264" },
+                { "codec_type": "audio", "codec_name": "aac" }
+            ],
+            "format": {
+                "format_name": "mov,3gp,3g2,mj2",
+                "format_long_name": "QuickTime / MOV"
+            }
+        }
+        "#; // MP4 and WebM are not listed, so should fall back to MOV as container format
+
+        let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
+        let metadata = ProbedMediaMetadata::from(output);
+
+        assert_eq!(metadata.container_format, Some(ContainerFormat::Mov));
+        assert_eq!(metadata.video_codec, Some(VideoCodec::H264));
+        assert_eq!(metadata.audio_codec, Some(AudioCodec::Aac));
     }
 }
