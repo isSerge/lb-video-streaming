@@ -6,6 +6,8 @@ use thiserror::Error;
 use tokio::process::Command;
 use url::Url;
 
+use crate::domain::{AudioCodec, ContainerFormat, VideoCodec};
+
 /// Wrapper around the `ffprobe` binary.
 #[allow(dead_code)]
 pub struct Ffprobe {
@@ -21,8 +23,8 @@ impl Ffprobe {
         }
     }
 
-    /// Probe media metadata from a URL and return parsed ffprobe JSON output.
-    pub async fn probe_url(&self, url: &Url) -> Result<FfprobeOutput, FfprobeError> {
+    /// Probe media metadata from a URL and return normalized fields used by the API.
+    pub async fn probe_url(&self, url: &Url) -> Result<ProbedMediaMetadata, FfprobeError> {
         let output = Command::new(&self.command)
             .args(Self::args(url))
             .output()
@@ -35,7 +37,8 @@ impl Ffprobe {
             });
         }
 
-        Ok(serde_json::from_slice(&output.stdout)?)
+        let parsed: FfprobeOutput = serde_json::from_slice(&output.stdout)?;
+        Ok(parsed.into())
     }
 
     /// Build ffprobe command-line arguments for probing a URL with JSON output.
@@ -59,26 +62,23 @@ impl Default for Ffprobe {
 }
 
 /// Top-level ffprobe JSON output.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-pub struct FfprobeOutput {
-    pub streams: Vec<FfprobeStream>,
-    pub format: Option<FfprobeFormat>,
+struct FfprobeOutput {
+    streams: Vec<FfprobeStream>,
+    format: Option<FfprobeFormat>,
 }
 
 /// Stream entry from ffprobe output.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-pub struct FfprobeStream {
-    pub codec_type: Option<FfprobeCodecType>,
-    pub codec_name: Option<String>,
+struct FfprobeStream {
+    codec_type: Option<FfprobeCodecType>,
+    codec_name: Option<String>,
 }
 
 /// Normalized codec type values reported by ffprobe.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum FfprobeCodecType {
+enum FfprobeCodecType {
     Video,
     Audio,
     Subtitle,
@@ -89,11 +89,57 @@ pub enum FfprobeCodecType {
 }
 
 /// Container format entry from ffprobe output.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-pub struct FfprobeFormat {
-    pub format_name: Option<String>,
-    pub format_long_name: Option<String>,
+struct FfprobeFormat {
+    format_name: Option<String>,
+    #[serde(rename = "format_long_name")]
+    _format_long_name: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProbedMediaMetadata {
+    pub container_format: Option<ContainerFormat>,
+    pub video_codec: Option<VideoCodec>,
+    pub audio_codec: Option<AudioCodec>,
+}
+
+impl From<FfprobeOutput> for ProbedMediaMetadata {
+    fn from(output: FfprobeOutput) -> Self {
+        fn normalized<'a>(value: Option<&'a str>) -> Option<&'a str> {
+            value.map(str::trim).filter(|name| !name.is_empty())
+        }
+
+        let codec_for = |codec_type: FfprobeCodecType| {
+            output
+                .streams
+                .iter()
+                .find(|s| {
+                    matches!(
+                        s.codec_type.as_ref(),
+                        Some(t) if *t == codec_type
+                    )
+                })
+                .and_then(|s| s.codec_name.as_deref())
+        };
+
+        let container_format = normalized(
+            output
+                .format
+                .as_ref()
+                .and_then(|f| f.format_name.as_deref())
+                .and_then(|formats| formats.split(',').next()),
+        )
+        .map(ContainerFormat::from);
+
+        let video_codec = normalized(codec_for(FfprobeCodecType::Video)).map(VideoCodec::from);
+        let audio_codec = normalized(codec_for(FfprobeCodecType::Audio)).map(AudioCodec::from);
+
+        Self {
+            container_format,
+            video_codec,
+            audio_codec,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -110,7 +156,8 @@ pub enum FfprobeError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ffprobe, FfprobeCodecType, FfprobeOutput};
+    use super::{Ffprobe, FfprobeCodecType, FfprobeOutput, ProbedMediaMetadata};
+    use crate::domain::{AudioCodec, ContainerFormat, VideoCodec};
     use url::Url;
 
     #[test]
@@ -172,5 +219,39 @@ mod tests {
             parsed.streams[0].codec_type,
             Some(FfprobeCodecType::Unknown)
         );
+    }
+
+    #[test]
+    fn metadata_from_output_extracts_container_and_codecs() {
+        let raw = r#"
+        {
+            "streams": [
+                { "codec_type": "video", "codec_name": "h264" },
+                { "codec_type": "audio", "codec_name": "aac" }
+            ],
+            "format": {
+                "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+                "format_long_name": "QuickTime / MOV"
+            }
+        }
+        "#;
+
+        let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
+        let metadata = ProbedMediaMetadata::from(output);
+
+        assert_eq!(metadata.container_format, Some(ContainerFormat::Mov));
+        assert_eq!(metadata.video_codec, Some(VideoCodec::H264));
+        assert_eq!(metadata.audio_codec, Some(AudioCodec::Aac));
+    }
+
+    #[test]
+    fn metadata_from_output_handles_missing_fields() {
+        let raw = r#"{ "streams": [{ "codec_type": "video" }], "format": null }"#;
+        let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
+        let metadata = ProbedMediaMetadata::from(output);
+
+        assert_eq!(metadata.container_format, None);
+        assert_eq!(metadata.video_codec, None);
+        assert_eq!(metadata.audio_codec, None);
     }
 }

@@ -30,11 +30,14 @@ async fn main() -> Result<(), AppError> {
     let r2_storage = r2_storage::R2Storage::new(&config);
     tracing::info!(bucket = %config.r2_bucket_name, "R2 storage client ready");
 
+    let ffprobe = ffprobe::Ffprobe::default();
+
     let bind_addr = format!("{}:{}", config.server_host, config.server_port.get());
 
     let state = api::AppState::new(
         Arc::new(video_repository),
         Arc::new(r2_storage),
+        Arc::new(ffprobe),
         Arc::new(config),
     );
     let app = api::router(state);

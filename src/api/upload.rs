@@ -72,6 +72,24 @@ pub async fn mark_upload_complete(
     State(state): State<AppState>,
     axum::extract::Path(ulid): axum::extract::Path<Ulid>,
 ) -> Result<StatusCode, ApiError> {
+    let row = state
+        .video_repository
+        .find_video_by_ulid(ulid)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let raw_url = state.config.public_object_url(&row.raw_key)?;
+    let metadata = state.ffprobe.probe_url(&raw_url).await?;
+
+    tracing::info!(
+        %ulid,
+        raw_url = %raw_url,
+        container_format = ?metadata.container_format,
+        video_codec = ?metadata.video_codec,
+        audio_codec = ?metadata.audio_codec,
+        "ffprobe metadata extracted"
+    );
+
     let found = state.video_repository.mark_uploaded(ulid).await?;
     if !found {
         return Err(ApiError::NotFound);

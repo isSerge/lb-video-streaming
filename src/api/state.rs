@@ -2,13 +2,19 @@
 
 use std::sync::Arc;
 
-use crate::{config::Config, r2_storage::R2Storage, video_repository::VideoRepository};
+use crate::{
+    config::Config,
+    ffprobe::Ffprobe,
+    r2_storage::R2Storage,
+    video_repository::VideoRepository,
+};
 
 /// Immutable application state required by API handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub video_repository: Arc<VideoRepository>,
     pub r2_storage: Arc<R2Storage>,
+    pub ffprobe: Arc<Ffprobe>,
     pub config: Arc<Config>,
 }
 
@@ -17,11 +23,13 @@ impl AppState {
     pub fn new(
         video_repository: Arc<VideoRepository>,
         r2_storage: Arc<R2Storage>,
+        ffprobe: Arc<Ffprobe>,
         config: Arc<Config>,
     ) -> Self {
         Self {
             video_repository,
             r2_storage,
+            ffprobe,
             config,
         }
     }

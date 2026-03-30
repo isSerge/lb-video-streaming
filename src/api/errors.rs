@@ -7,6 +7,7 @@ use url::ParseError;
 
 use crate::{
     domain::{UploadContentTypeError, UploadSizeError, VideoStatusError},
+    ffprobe::FfprobeError,
     r2_storage::R2StorageError,
 };
 
@@ -38,6 +39,9 @@ pub enum ApiError {
 
     #[error(transparent)]
     R2Storage(#[from] R2StorageError),
+
+    #[error(transparent)]
+    Ffprobe(#[from] FfprobeError),
 }
 
 impl IntoResponse for ApiError {
@@ -45,7 +49,11 @@ impl IntoResponse for ApiError {
         let status = match self {
             Self::UploadSize(_) | Self::UploadContentType(_) => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::Database(_) | Self::VideoStatus(_) | Self::UrlParse(_) | Self::R2Storage(_) => {
+            Self::Database(_)
+            | Self::VideoStatus(_)
+            | Self::UrlParse(_)
+            | Self::R2Storage(_)
+            | Self::Ffprobe(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
