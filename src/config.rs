@@ -38,6 +38,9 @@ pub struct Config {
 
     #[serde(default = "defaults::presigned_upload_ttl_secs")]
     pub presigned_upload_ttl_secs: NonZeroU64,
+
+    #[serde(default = "defaults::ui_origin")]
+    pub ui_origin: String,
 }
 
 impl Config {
@@ -141,6 +144,10 @@ mod defaults {
     pub fn presigned_upload_ttl_secs() -> NonZeroU64 {
         NonZeroU64::new(900).expect("default presigned_upload_ttl_secs must be non-zero")
     }
+
+    pub fn ui_origin() -> String {
+        "http://localhost:5173".to_string()
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +190,7 @@ mod tests {
         assert!(matches!(cfg.log_level, LogLevel::Info));
         assert_eq!(cfg.max_upload_bytes.get(), 1_073_741_824);
         assert_eq!(cfg.presigned_upload_ttl_secs.get(), 900);
+        assert_eq!(cfg.ui_origin, "http://localhost:5173");
     }
 
     #[test]
@@ -201,12 +209,14 @@ mod tests {
         vars.push(("LOG_LEVEL".into(), "debug".into()));
         vars.push(("MAX_UPLOAD_BYTES".into(), "12345".into()));
         vars.push(("PRESIGNED_UPLOAD_TTL_SECS".into(), "120".into()));
+        vars.push(("UI_ORIGIN".into(), "http://127.0.0.1:5173".into()));
         let cfg = Config::from_iter(vars).unwrap();
         assert_eq!(cfg.server_host, "127.0.0.1".parse::<IpAddr>().unwrap());
         assert_eq!(cfg.server_port.get(), 8080);
         assert!(matches!(cfg.log_level, LogLevel::Debug));
         assert_eq!(cfg.max_upload_bytes.get(), 12345);
         assert_eq!(cfg.presigned_upload_ttl_secs.get(), 120);
+        assert_eq!(cfg.ui_origin, "http://127.0.0.1:5173");
     }
 
     #[test]
