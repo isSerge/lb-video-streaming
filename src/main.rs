@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod domain;
+mod ffprobe;
 mod r2_storage;
 mod video_repository;
 
