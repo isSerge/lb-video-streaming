@@ -32,7 +32,7 @@ pub async fn get_video_metadata(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let status = VideoStatus::try_from(row.status)?;
+    let status: VideoStatus = row.status.parse()?;
     let raw_url = Some(state.config.public_object_url(&row.raw_key)?);
     let transmux_url = row
         .transmux_key

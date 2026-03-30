@@ -1,6 +1,7 @@
 //! Domain type for video processing status.
 
 use serde::Serialize;
+use std::str::FromStr;
 use thiserror::Error;
 
 /// API-facing status of a video in the processing pipeline.
@@ -21,17 +22,17 @@ pub enum VideoStatusError {
     Invalid(String),
 }
 
-impl TryFrom<String> for VideoStatus {
-    type Error = VideoStatusError;
+impl FromStr for VideoStatus {
+    type Err = VideoStatusError;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
             "pending_upload" => Ok(Self::PendingUpload),
             "uploaded" => Ok(Self::Uploaded),
             "transmuxing" => Ok(Self::Transmuxing),
             "ready" => Ok(Self::Ready),
             "failed" => Ok(Self::Failed),
-            _ => Err(VideoStatusError::Invalid(value)),
+            _ => Err(VideoStatusError::Invalid(value.to_string())),
         }
     }
 }
@@ -130,38 +131,38 @@ mod tests {
 
     #[test]
     fn parses_pending_upload_status() {
-        let status = VideoStatus::try_from("pending_upload".to_string()).unwrap();
+        let status: VideoStatus = "pending_upload".parse().unwrap();
         assert!(matches!(status, VideoStatus::PendingUpload));
     }
 
     #[test]
     fn parses_uploaded_status() {
-        let status = VideoStatus::try_from("uploaded".to_string()).unwrap();
+        let status: VideoStatus = "uploaded".parse().unwrap();
         assert!(matches!(status, VideoStatus::Uploaded));
     }
 
     #[test]
     fn parses_transmuxing_status() {
-        let status = VideoStatus::try_from("transmuxing".to_string()).unwrap();
+        let status: VideoStatus = "transmuxing".parse().unwrap();
         assert!(matches!(status, VideoStatus::Transmuxing));
     }
 
     #[test]
     fn parses_ready_status() {
-        let status = VideoStatus::try_from("ready".to_string()).unwrap();
+        let status: VideoStatus = "ready".parse().unwrap();
         assert!(matches!(status, VideoStatus::Ready));
     }
 
     #[test]
     fn parses_failed_status() {
-        let status = VideoStatus::try_from("failed".to_string()).unwrap();
+        let status: VideoStatus = "failed".parse().unwrap();
         assert!(matches!(status, VideoStatus::Failed));
     }
 
     #[test]
     fn rejects_unknown_status_and_preserves_value() {
         let value = "processing".to_string();
-        let result = VideoStatus::try_from(value.clone());
+        let result = value.parse::<VideoStatus>();
 
         assert!(matches!(result, Err(VideoStatusError::Invalid(v)) if v == value));
     }
