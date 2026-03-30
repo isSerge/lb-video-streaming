@@ -69,6 +69,23 @@ impl Config {
     }
 }
 
+#[cfg(test)]
+impl Config {
+    /// Build a minimal config suitable for unit and integration tests.
+    pub fn test() -> Self {
+        Self::from_iter([
+            ("DATABASE_URL".into(), "postgres://localhost/test".into()),
+            ("R2_ACCOUNT_ID".into(), "test".into()),
+            ("R2_ACCESS_KEY_ID".into(), "test".into()),
+            ("R2_SECRET_ACCESS_KEY".into(), "test".into()),
+            ("R2_BUCKET_NAME".into(), "test".into()),
+            ("R2_ACCOUNT_TOKEN".into(), "test".into()),
+            ("PUBLIC_CDN_DOMAIN".into(), "https://cdn.example.com".into()),
+        ])
+        .expect("test config is valid")
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {

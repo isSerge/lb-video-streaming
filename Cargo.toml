@@ -26,3 +26,4 @@ async-trait = "0.1"
 
 [dev-dependencies]
 mockall = "0.14"
+tower = { version = "0.5", features = ["util"] }

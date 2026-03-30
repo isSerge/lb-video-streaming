@@ -6,6 +6,9 @@ mod state;
 mod upload;
 mod video;
 
+#[cfg(test)]
+mod tests;
+
 use axum::{
     Router,
     routing::{get, post},

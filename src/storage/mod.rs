@@ -63,7 +63,6 @@ impl R2Storage {
             upload_url_ttl_secs: config.presigned_upload_ttl_secs.get(),
         }
     }
-
 }
 
 #[async_trait::async_trait]

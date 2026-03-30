@@ -34,7 +34,6 @@ impl PgVideoRepository {
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self { pool })
     }
-
 }
 
 #[async_trait::async_trait]
