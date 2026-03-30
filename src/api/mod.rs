@@ -1,31 +1,21 @@
-use axum::{extract::Json, routing::get, Router};
-use serde::Serialize;
+//! API module composition and route wiring.
 
-// TODO: add comment on necessary production routes (metrics, liveness/readiness, etc.)
+mod errors;
+mod health;
+mod state;
+mod upload;
+mod video;
 
-pub fn router() -> Router {
-    Router::new().route("/health", get(health))
-}
+use axum::{routing::{get, post}, Router};
 
-#[derive(Debug, Serialize)]
-struct HealthResponse {
-    status: &'static str,
-    checks: HealthChecks,
-}
+pub use state::AppState;
 
-#[derive(Debug, Serialize)]
-struct HealthChecks {
-    // TODO: wire real DB ping and R2 check once state is injected into router.
-    database: &'static str,
-    storage: &'static str,
-}
-
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok",
-        checks: HealthChecks {
-            database: "todo",
-            storage: "todo",
-        },
-    })
+/// Build the top-level API router.
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health::health))
+        .route("/api/upload-url", post(upload::create_upload_url))
+        .route("/api/upload-complete/{ulid}", post(upload::mark_upload_complete))
+        .route("/api/video/{ulid}", get(video::get_video_metadata))
+        .with_state(state)
 }

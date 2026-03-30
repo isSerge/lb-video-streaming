@@ -1,9 +1,11 @@
 mod api;
 mod config;
-mod db;
-mod storage;
+mod domain;
+mod r2_storage;
+mod video_repository;
 
 use config::Config;
+use std::sync::Arc;
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
 
@@ -21,20 +23,24 @@ async fn main() -> Result<(), AppError> {
 
     tracing::info!(cdn_domain = %config.public_cdn_domain, "configuration loaded");
 
-    let database = db::Database::new(&config).await?;
+    let video_repository = video_repository::VideoRepository::new(&config).await?;
     tracing::info!("database connected and migrations applied");
 
-    let _storage = storage::Storage::new(&config);
+    let r2_storage = r2_storage::R2Storage::new(&config);
     tracing::info!(bucket = %config.r2_bucket_name, "R2 storage client ready");
 
-    let app = api::router();
     let bind_addr = format!("{}:{}", config.server_host, config.server_port.get());
+
+    let state = api::AppState::new(
+        Arc::new(video_repository),
+        Arc::new(r2_storage),
+        Arc::new(config),
+    );
+    let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 
     tracing::info!(addr = %listener.local_addr()?, "server listening");
     axum::serve(listener, app).await?;
-
-    drop(database);
 
     Ok(())
 }
