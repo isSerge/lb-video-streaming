@@ -1,15 +1,18 @@
 use sqlx::PgPool;
 use ulid::Ulid;
 
-use crate::{config::Config, domain::{RawUploadKey, UploadContentType}};
+use crate::{
+    config::Config,
+    domain::{ManifestKey, RawUploadKey, TransmuxKey, UploadContentType},
+};
 
 #[derive(Debug)]
 pub struct VideoRecord {
     pub ulid: Ulid,
     pub status: String,
-    pub raw_key: String,
-    pub transmux_key: Option<String>,
-    pub manifest_key: Option<String>,
+    pub raw_key: RawUploadKey,
+    pub transmux_key: Option<TransmuxKey>,
+    pub manifest_key: Option<ManifestKey>,
     pub browser_compatible: bool,
     pub transmux_required: bool,
     pub transcode_required: bool,
@@ -84,9 +87,9 @@ impl VideoRepository {
             VideoRecord {
                 ulid,
             status: r.status,
-            raw_key: r.raw_key,
-            transmux_key: r.transmux_key,
-            manifest_key: r.manifest_key,
+            raw_key: r.raw_key.into(),
+            transmux_key: r.transmux_key.map(Into::into),
+            manifest_key: r.manifest_key.map(Into::into),
             browser_compatible: r.browser_compatible,
             transmux_required: r.transmux_required,
             transcode_required: r.transcode_required,
@@ -138,7 +141,7 @@ mod tests {
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
         assert_eq!(found.ulid, ulid);
         assert_eq!(found.status, "pending_upload");
-        assert_eq!(found.raw_key, &*raw_key);
+        assert_eq!(&*found.raw_key, &*raw_key);
         assert!(!found.browser_compatible);
         assert!(!found.transmux_required);
         assert!(found.transcode_required);
@@ -246,11 +249,11 @@ mod tests {
 
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
         assert_eq!(
-            found.transmux_key.as_deref(),
+            found.transmux_key.as_ref().map(|k| &**k),
             Some("transmux/01ARZ3NDEKTSV4RRFFQ69G5FB2/output.mp4")
         );
         assert_eq!(
-            found.manifest_key.as_deref(),
+            found.manifest_key.as_ref().map(|k| &**k),
             Some("hls/01ARZ3NDEKTSV4RRFFQ69G5FB2/manifest.m3u8")
         );
         assert!(found.browser_compatible);

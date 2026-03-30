@@ -8,6 +8,12 @@ use ulid::Ulid;
 #[derive(Debug)]
 pub struct RawUploadKey(String);
 
+impl From<String> for RawUploadKey {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 impl Deref for RawUploadKey {
     type Target = str;
 
