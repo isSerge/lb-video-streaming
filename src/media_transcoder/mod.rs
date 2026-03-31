@@ -21,9 +21,14 @@ pub enum TranscoderError {
 }
 
 /// Wrapper around the `ffmpeg` binary.
-#[derive(Default)]
 pub struct Ffmpeg {
     command: String,
+}
+
+impl Default for Ffmpeg {
+    fn default() -> Self {
+        Self::new("ffmpeg")
+    }
 }
 
 impl Ffmpeg {
