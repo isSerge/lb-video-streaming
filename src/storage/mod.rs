@@ -10,7 +10,7 @@ use url::{ParseError, Url};
 
 use crate::{
     config::Config,
-    domain::{RawUploadKey, UploadContentType},
+    domain::{RawUploadKey, TransmuxKey, UploadContentType},
 };
 
 /// Holds storage resources for interacting with Cloudflare R2.
@@ -63,6 +63,42 @@ impl R2Storage {
             upload_url_ttl_secs: config.presigned_upload_ttl_secs.get(),
         }
     }
+
+    /// Helper method to generate a presigned PUT URL for a given key and content type.
+    async fn presign_put(&self, key: &str, content_type: &str) -> Result<Url, R2StorageError> {
+        let presign_cfg =
+            PresigningConfig::expires_in(Duration::from_secs(self.upload_url_ttl_secs))
+                .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
+
+        let presigned = self
+            .client
+            .put_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .content_type(content_type)
+            .presigned(presign_cfg)
+            .await
+            .map_err(|e| R2StorageError::Presign(e.to_string()))?;
+
+        Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
+    }
+
+    /// Helper method to generate a presigned GET URL for a given key and TTL.
+    async fn presign_get(&self, key: &str, ttl_secs: u64) -> Result<Url, R2StorageError> {
+        let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(ttl_secs))
+            .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
+
+        let presigned = self
+            .client
+            .get_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .presigned(presign_cfg)
+            .await
+            .map_err(|e| R2StorageError::Presign(e.to_string()))?;
+
+        Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
+    }
 }
 
 #[async_trait::async_trait]
@@ -72,21 +108,7 @@ impl Storage for R2Storage {
         key: &RawUploadKey,
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError> {
-        let presign_cfg =
-            PresigningConfig::expires_in(Duration::from_secs(self.upload_url_ttl_secs))
-                .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
-
-        let presigned = self
-            .client
-            .put_object()
-            .bucket(&self.bucket_name)
-            .key(&**key)
-            .content_type(&**content_type)
-            .presigned(presign_cfg)
-            .await
-            .map_err(|e| R2StorageError::Presign(e.to_string()))?;
-
-        Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
+        self.presign_put(&**key, &**content_type).await
     }
 
     async fn create_download_url(
@@ -94,18 +116,14 @@ impl Storage for R2Storage {
         key: &RawUploadKey,
         ttl_secs: u64,
     ) -> Result<Url, R2StorageError> {
-        let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(ttl_secs))
-            .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
+        self.presign_get(&**key, ttl_secs).await
+    }
 
-        let presigned = self
-            .client
-            .get_object()
-            .bucket(&self.bucket_name)
-            .key(&**key)
-            .presigned(presign_cfg)
-            .await
-            .map_err(|e| R2StorageError::Presign(e.to_string()))?;
-
-        Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
+    async fn create_transmux_upload_url(
+        &self,
+        key: &TransmuxKey,
+        content_type: &UploadContentType,
+    ) -> Result<Url, R2StorageError> {
+        self.presign_put(&**key, &**content_type).await
     }
 }
