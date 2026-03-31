@@ -95,11 +95,12 @@ impl FfprobeOutput {
 
     /// Resolve the container format from ffprobe's format_name field, which may contain multiple comma-separated aliases.
     fn resolve_container(format_names: &str, ext_hint: Option<&str>) -> ContainerFormat {
-        let parts: Vec<&str> = format_names.split(',').map(str::trim).collect();
+        let mut parts = format_names.split(',').map(str::trim);
+        let first = parts.next().unwrap_or("");
 
-        // if ffprobe returns a single demuxer name it's already unambiguous and we pass it straight to the Into<ContainerFormat> conversion
-        if parts.len() == 1 {
-            return parts[0].into();
+        // If there is no second item, it's unambiguous; return the first immediately
+        if parts.next().is_none() {
+            return first.into();
         }
 
         // For ambiguous groups (e.g. "matroska,webm" or "mov,mp4,m4a,..."),
@@ -110,7 +111,7 @@ impl FfprobeOutput {
             Some("mp4") => ContainerFormat::Mp4,
             Some("mov") => ContainerFormat::Mov,
             Some("avi") => ContainerFormat::Avi,
-            _ => parts.first().copied().unwrap_or("").into(), // fallback to first format or unknown if empty
+            _ => first.into(), // fallback to first format or unknown if empty
         }
     }
 }
@@ -293,5 +294,29 @@ mod tests {
 
         // Should prefer MP4 over WebM if both are listed
         assert_eq!(metadata.container_format, Some(ContainerFormat::Mp4));
+    }
+
+    #[test]
+    fn metadata_from_output_resolves_ambiguous_format_using_extension_hint() {
+        let raw = r#"
+        {
+            "streams": [],
+            "format": {
+                "format_name": "matroska,webm",
+                "format_long_name": "Matroska / WebM"
+            }
+        }
+        "#;
+
+        // Simulate ffprobe output parsed from a URL like: https://example.com/video.webm
+        let output = serde_json::from_str::<FfprobeOutput>(raw)
+            .unwrap()
+            .with_hint(Some("webm"));
+
+        let metadata = MediaMetadata::from(output);
+
+        // Without the hint, it would default to Matroska (the first item).
+        // With the hint, it correctly resolves to Webm.
+        assert_eq!(metadata.container_format, Some(ContainerFormat::Webm));
     }
 }
