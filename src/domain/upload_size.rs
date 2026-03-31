@@ -7,6 +7,7 @@ use thiserror::Error;
 /// Strongly typed upload size value in bytes.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(try_from = "i64")]
+#[derive(Default)]
 pub struct UploadSizeBytes(u64);
 
 /// Maximum allowed upload size in bytes.
@@ -21,12 +22,6 @@ pub enum UploadSizeError {
 
     #[error("size_bytes exceeds configured upload limit")]
     ExceedsLimit,
-}
-
-impl Default for UploadSizeBytes {
-    fn default() -> Self {
-        Self(0)
-    }
 }
 
 impl TryFrom<Option<i64>> for UploadSizeBytes {

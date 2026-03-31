@@ -80,7 +80,7 @@ impl R2Storage {
             .await
             .map_err(|e| R2StorageError::Presign(e.to_string()))?;
 
-        Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
+        Url::parse(presigned.uri()).map_err(R2StorageError::from)
     }
 
     /// Helper method to generate a presigned GET URL for a given key and TTL.
@@ -97,7 +97,7 @@ impl R2Storage {
             .await
             .map_err(|e| R2StorageError::Presign(e.to_string()))?;
 
-        Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
+        Url::parse(presigned.uri()).map_err(R2StorageError::from)
     }
 }
 
@@ -108,11 +108,11 @@ impl Storage for R2Storage {
         key: &RawUploadKey,
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError> {
-        self.presign_put(&**key, &**content_type).await
+        self.presign_put(key, content_type).await
     }
 
     async fn create_download_url(&self, key: &RawUploadKey) -> Result<Url, R2StorageError> {
-        self.presign_get(&**key, self.url_ttl_secs).await
+        self.presign_get(key, self.url_ttl_secs).await
     }
 
     async fn create_transmux_upload_url(
@@ -120,6 +120,6 @@ impl Storage for R2Storage {
         key: &TransmuxKey,
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError> {
-        self.presign_put(&**key, &**content_type).await
+        self.presign_put(key, content_type).await
     }
 }

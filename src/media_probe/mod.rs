@@ -147,7 +147,7 @@ struct FfprobeFormat {
 impl From<FfprobeOutput> for MediaMetadata {
     fn from(output: FfprobeOutput) -> Self {
         // Helper to trim and filter out empty codec names
-        fn normalized<'a>(value: Option<&'a str>) -> Option<&'a str> {
+        fn normalized(value: Option<&str>) -> Option<&str> {
             value.map(str::trim).filter(|name| !name.is_empty())
         }
 

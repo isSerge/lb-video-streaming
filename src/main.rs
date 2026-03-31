@@ -39,7 +39,7 @@ async fn main() -> Result<(), AppError> {
 
     // Ensure the worker temp directory exists before starting the application
     let temp_root = PathBuf::from(&config.worker_temp_dir);
-    std::fs::create_dir_all(&temp_root).map_err(|e| AppError::Io(e))?;
+    std::fs::create_dir_all(&temp_root).map_err(AppError::Io)?;
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -91,6 +91,7 @@ async fn main() -> Result<(), AppError> {
             config.zombie_sweep_interval_secs,
             config.pending_upload_ttl_secs,
         )
+        .await
     });
 
     // Recover jobs lost during restart by sending all pending uploads to the worker.
