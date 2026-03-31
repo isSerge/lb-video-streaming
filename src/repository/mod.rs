@@ -573,4 +573,107 @@ mod tests {
             Some("transmux/01ARZ3NDEKTSV4RRFFQ69G5FF1/output.mp4")
         );
     }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn recover_pending_jobs_returns_empty_when_no_jobs_exist(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool);
+        let recovered = repository.recover_pending_jobs().await.unwrap();
+
+        assert!(recovered.is_empty());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn recover_pending_jobs_ignores_terminal_and_pending_states(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+        let u_ready = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC4");
+        let u_failed = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC5");
+        let u_pending = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC6");
+
+        for (u, status) in [
+            (u_ready, "ready"),
+            (u_failed, "failed"),
+            (u_pending, "pending_upload"),
+        ] {
+            repository
+                .create_pending_video(u, &raw_key(u), &content_type("video/mp4"), 100)
+                .await
+                .unwrap();
+            sqlx::query!(
+                "UPDATE videos SET status = $1 WHERE ulid = $2",
+                status,
+                u.to_string()
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let recovered = repository.recover_pending_jobs().await.unwrap();
+
+        // It must strictly ignore jobs that are complete, permanently failed, or haven't finished uploading
+        assert!(recovered.is_empty());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn mark_zombie_jobs_failed_returns_zero_when_no_jobs_exist(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool);
+        let timeout = NonZeroU64::new(7200).unwrap();
+
+        let affected = repository.mark_zombie_jobs_failed(timeout).await.unwrap();
+        assert_eq!(affected, 0);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn mark_zombie_jobs_failed_ignores_old_jobs_in_terminal_states(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+        let timeout = NonZeroU64::new(7200).unwrap();
+
+        let u_ready = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD1");
+        let u_failed = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD2");
+        let u_uploaded = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD3"); // Uploaded, but hasn't started processing
+
+        for u in [u_ready, u_failed, u_uploaded] {
+            repository
+                .create_pending_video(u, &raw_key(u), &content_type("video/mp4"), 100)
+                .await
+                .unwrap();
+        }
+
+        // Backdate them all past the timeout (e.g., jobs completed 5 hours ago)
+        for (u, status) in [
+            (u_ready, "ready"),
+            (u_failed, "failed"),
+            (u_uploaded, "uploaded"),
+        ] {
+            sqlx::query!(
+                "UPDATE videos SET status = $1, updated_at = NOW() - INTERVAL '5 hours' WHERE ulid = $2",
+                status, u.to_string()
+            ).execute(&pool).await.unwrap();
+        }
+
+        let affected = repository.mark_zombie_jobs_failed(timeout).await.unwrap();
+
+        // Because they aren't in 'transcoding' or 'transmuxing', the query must leave them alone
+        assert_eq!(affected, 0);
+
+        // Sanity check they weren't altered
+        assert_eq!(
+            repository
+                .find_video_by_ulid(u_ready)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "ready"
+        );
+        assert_eq!(
+            repository
+                .find_video_by_ulid(u_uploaded)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "uploaded"
+        );
+    }
 }
