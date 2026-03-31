@@ -112,7 +112,13 @@ pub mod typestate {
     }
 
     impl VideoState<Uploaded> {
+        /// Start transmuxing (container repackaging without re-encode).
         pub fn start_transmuxing(self) -> VideoState<Transmuxing> {
+            VideoState::default()
+        }
+
+        /// Start transcoding directly (when transmux is not required).
+        pub fn start_transcoding(self) -> VideoState<Transcoding> {
             VideoState::default()
         }
 
@@ -122,7 +128,8 @@ pub mod typestate {
     }
 
     impl VideoState<Transmuxing> {
-        pub fn mark_ready(self) -> VideoState<Ready> {
+        /// Transmux finished successfully, now proceed to transcoding.
+        pub fn complete_transmux(self) -> VideoState<Transcoding> {
             VideoState::default()
         }
 
@@ -132,7 +139,8 @@ pub mod typestate {
     }
 
     impl VideoState<Transcoding> {
-        pub fn mark_ready(self) -> VideoState<Ready> {
+        /// Transcoding finished successfully.
+        pub fn complete_transcoding(self) -> VideoState<Ready> {
             VideoState::default()
         }
 
@@ -203,11 +211,22 @@ mod tests {
     }
 
     #[test]
-    fn typestate_allows_valid_transition_chain() {
+    fn typestate_allows_transmux_then_transcode_then_ready() {
         let state = VideoState::<PendingUpload>::new();
         let state = state.mark_uploaded();
         let state = state.start_transmuxing();
-        let state = state.mark_ready();
+        let state = state.complete_transmux(); // now Transcoding
+        let state = state.complete_transcoding();
+
+        assert!(matches!(state.status(), VideoStatus::Ready));
+    }
+
+    #[test]
+    fn typestate_allows_direct_transcoding() {
+        let state = VideoState::<PendingUpload>::new();
+        let state = state.mark_uploaded();
+        let state = state.start_transcoding();
+        let state = state.complete_transcoding();
 
         assert!(matches!(state.status(), VideoStatus::Ready));
     }
@@ -219,10 +238,18 @@ mod tests {
             .mark_uploaded()
             .start_transmuxing()
             .fail();
+        let failed_from_transcoding = VideoState::<PendingUpload>::new()
+            .mark_uploaded()
+            .start_transcoding()
+            .fail();
 
         assert!(matches!(failed_from_uploaded.status(), VideoStatus::Failed));
         assert!(matches!(
             failed_from_transmuxing.status(),
+            VideoStatus::Failed
+        ));
+        assert!(matches!(
+            failed_from_transcoding.status(),
             VideoStatus::Failed
         ));
     }
