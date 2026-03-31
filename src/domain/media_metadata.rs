@@ -139,6 +139,16 @@ impl MediaMetadata {
 
         is_h264_mkv || is_vp_mkv
     }
+
+    /// Determine the target container format for transmuxing.
+    /// Returns `None` if the media is not a transmux candidate or if the target container cannot be determined.
+    pub fn transmux_target_container(&self) -> Option<ContainerFormat> {
+        match self.video_codec {
+            Some(VideoCodec::H264) => Some(ContainerFormat::Mp4),
+            Some(VideoCodec::Vp8 | VideoCodec::Vp9) => Some(ContainerFormat::Webm),
+            _ => None,
+        }
+    }
 }
 
 impl FromStr for ContainerFormat {
@@ -338,5 +348,44 @@ mod tests {
         assert!(!c.browser_compatible());
         assert!(!c.transmux_required());
         assert!(c.transcode_required());
+    }
+
+    #[test]
+    fn transmux_target_container_returns_mp4_for_h264() {
+        let metadata = MediaMetadata {
+            container_format: Some(ContainerFormat::Matroska),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: Some(AudioCodec::Aac),
+        };
+
+        assert_eq!(
+            metadata.transmux_target_container(),
+            Some(ContainerFormat::Mp4)
+        );
+    }
+
+    #[test]
+    fn transmux_target_container_returns_webm_for_vp9() {
+        let metadata = MediaMetadata {
+            container_format: Some(ContainerFormat::Matroska),
+            video_codec: Some(VideoCodec::Vp9),
+            audio_codec: Some(AudioCodec::Vorbis),
+        };
+
+        assert_eq!(
+            metadata.transmux_target_container(),
+            Some(ContainerFormat::Webm)
+        );
+    }
+
+    #[test]
+    fn transmux_target_container_returns_none_for_non_transmux_candidate() {
+        let metadata = MediaMetadata {
+            container_format: Some(ContainerFormat::Flv),
+            video_codec: Some(VideoCodec::Mpeg4),
+            audio_codec: Some(AudioCodec::Mp3),
+        };
+
+        assert_eq!(metadata.transmux_target_container(), None);
     }
 }
