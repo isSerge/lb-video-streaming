@@ -46,14 +46,6 @@ async fn main() -> Result<(), AppError> {
     // Create a channel for communicating upload completion events to the worker.
     let (worker_tx, worker_rx) = tokio::sync::mpsc::channel(config.worker_channel_buffer_size);
 
-    // Recover jobs lost during restart by sending all pending uploads to the worker.
-    let recovered = video_repository.recover_pending_jobs().await?;
-    for ulid in recovered {
-        // TODO: consider batching, rate-limiting or other strategies
-        // TODO: consider error handling and retry logic here to avoid losing jobs
-        let _ = worker_tx.send(ulid).await;
-    }
-
     // Spawn worker tasks for processing uploads and sweeping zombies.
     let mut worker = worker::Worker::new(worker_rx); // has to be mutable to receive from the channel
     let worker_video_repo_clone = Arc::clone(&video_repository);
@@ -66,6 +58,14 @@ async fn main() -> Result<(), AppError> {
             config.zombie_sweep_interval_secs,
         )
     });
+
+    // Recover jobs lost during restart by sending all pending uploads to the worker.
+    let recovered = video_repository.recover_pending_jobs().await?;
+    for ulid in recovered {
+        // TODO: consider batching, rate-limiting or other strategies
+        // TODO: consider error handling and retry logic here to avoid losing jobs
+        let _ = worker_tx.send(ulid).await;
+    }
 
     let state = api::AppState::new(
         video_repository,
