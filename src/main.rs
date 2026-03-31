@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod domain;
 mod media_probe;
+mod media_transcoder;
 mod repository;
 mod storage;
 mod worker;

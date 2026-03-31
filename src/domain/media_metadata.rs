@@ -17,6 +17,13 @@ pub enum ContainerFormat {
     Unknown,
 }
 
+impl ContainerFormat {
+    /// Returns true if this container is a valid output target for transmuxing.
+    pub fn is_transmux_target(&self) -> bool {
+        matches!(self, Self::Mp4 | Self::Webm)
+    }
+}
+
 /// Normalized video codec types relevant for compatibility checks and API responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
