@@ -20,7 +20,6 @@ pub struct Config {
     pub r2_access_key_id: String,
     pub r2_secret_access_key: String,
     pub r2_bucket_name: String,
-    pub r2_account_token: String,
     pub public_cdn_domain: String,
 
     // --- optional (env overrides default) ---
@@ -97,7 +96,6 @@ impl Config {
             ("R2_ACCESS_KEY_ID".into(), "test".into()),
             ("R2_SECRET_ACCESS_KEY".into(), "test".into()),
             ("R2_BUCKET_NAME".into(), "test".into()),
-            ("R2_ACCOUNT_TOKEN".into(), "test".into()),
             ("PUBLIC_CDN_DOMAIN".into(), "https://cdn.example.com".into()),
         ])
         .expect("test config is valid")
@@ -190,7 +188,6 @@ mod tests {
             ("R2_ACCESS_KEY_ID".into(), "key123".into()),
             ("R2_SECRET_ACCESS_KEY".into(), "secret123".into()),
             ("R2_BUCKET_NAME".into(), "my-bucket".into()),
-            ("R2_ACCOUNT_TOKEN".into(), "token123".into()),
             ("PUBLIC_CDN_DOMAIN".into(), "https://cdn.example.com".into()),
         ]
     }
