@@ -5,6 +5,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::Value;
+use tokio::sync::mpsc;
 use tower::ServiceExt;
 use ulid::Ulid;
 use url::Url;
@@ -27,11 +28,13 @@ fn build_app(
     storage: MockStorage,
     probe: MockMediaProbe,
 ) -> axum::Router {
+    let (tx, _rx) = mpsc::channel(1); // dummy channel for AppState, not used in tests
     router(AppState::new(
         Arc::new(repo),
         Arc::new(storage),
         Arc::new(probe),
         test_config(),
+        tx,
     ))
 }
 

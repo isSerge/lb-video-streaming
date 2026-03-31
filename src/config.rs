@@ -48,6 +48,14 @@ pub struct Config {
     /// Duration in seconds after which pending uploads are considered "zombies" and eligible for cleanup.
     #[serde(default = "defaults::zombie_timeout_secs")]
     pub zombie_timeout_secs: NonZeroU64,
+
+    /// Interval in seconds at which the zombie sweeper runs.
+    #[serde(default = "defaults::zombie_sweep_interval_secs")]
+    pub zombie_sweep_interval_secs: NonZeroU64,
+
+    /// Buffer size for the channel used to communicate upload completion events to the worker.
+    #[serde(default = "defaults::worker_channel_buffer_size")]
+    pub worker_channel_buffer_size: usize,
 }
 
 impl Config {
@@ -158,6 +166,14 @@ mod defaults {
 
     pub fn zombie_timeout_secs() -> NonZeroU64 {
         NonZeroU64::new(7200).expect("default zombie_timeout_secs must be non-zero") // Default: 2 hours
+    }
+
+    pub fn zombie_sweep_interval_secs() -> NonZeroU64 {
+        NonZeroU64::new(3600).expect("default zombie_sweep_interval_secs must be non-zero") // Default: 1 hour
+    }
+
+    pub fn worker_channel_buffer_size() -> usize {
+        100
     }
 }
 

@@ -10,8 +10,8 @@ mod video;
 mod tests;
 
 use axum::{
-    http::{HeaderValue, Method, header},
     Router,
+    http::{HeaderValue, Method, header},
     routing::{get, post},
 };
 use tower_http::cors::CorsLayer;

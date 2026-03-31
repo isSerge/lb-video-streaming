@@ -2,6 +2,9 @@
 
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+use ulid::Ulid;
+
 use crate::{
     config::Config, media_probe::MediaProbe, repository::VideoRepository, storage::Storage,
 };
@@ -13,6 +16,7 @@ pub struct AppState {
     pub storage: Arc<dyn Storage>,
     pub media_probe: Arc<dyn MediaProbe>,
     pub config: Arc<Config>,
+    pub worker_tx: mpsc::Sender<Ulid>,
 }
 
 impl AppState {
@@ -22,12 +26,14 @@ impl AppState {
         storage: Arc<dyn Storage>,
         media_probe: Arc<dyn MediaProbe>,
         config: Arc<Config>,
+        worker_tx: mpsc::Sender<Ulid>,
     ) -> Self {
         Self {
             video_repository,
             storage,
             media_probe,
             config,
+            worker_tx,
         }
     }
 }
