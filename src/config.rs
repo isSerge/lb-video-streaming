@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
+use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
@@ -63,6 +64,9 @@ pub struct Config {
     /// Duration in seconds after which pending uploads that haven't completed are automatically marked as failed.
     #[serde(default = "defaults::pending_upload_ttl_secs")]
     pub pending_upload_ttl_secs: NonZeroU64,
+
+    #[serde(default = "defaults::worker_temp_dir")]
+    pub worker_temp_dir: PathBuf,
 }
 
 impl Config {
@@ -140,7 +144,10 @@ pub enum ConfigError {
 
 mod defaults {
     use super::{LogLevel, NonZeroU16, NonZeroU64, NonZeroUsize};
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        path::PathBuf,
+    };
 
     pub fn max_concurrent_transcodes() -> NonZeroUsize {
         NonZeroUsize::new(1).expect("default max_concurrent_transcodes must be non-zero")
@@ -188,6 +195,10 @@ mod defaults {
 
     pub fn pending_upload_ttl_secs() -> NonZeroU64 {
         NonZeroU64::new(3600).expect("default pending_upload_ttl_secs must be non-zero") // 1 hour
+    }
+
+    pub fn worker_temp_dir() -> PathBuf {
+        std::env::temp_dir().join("video-worker")
     }
 }
 

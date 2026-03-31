@@ -47,7 +47,14 @@ async fn main() -> Result<(), AppError> {
     let (worker_tx, worker_rx) = tokio::sync::mpsc::channel(config.worker_channel_buffer_size);
 
     // Spawn worker tasks for processing uploads and sweeping zombies.
-    let mut worker = worker::Worker::new(worker_rx); // has to be mutable to receive from the channel
+    let mut worker = worker::Worker::new(
+        worker_rx,
+        Arc::clone(&video_repository),
+        Arc::clone(&storage),
+        Arc::clone(&media_probe),
+        config.max_concurrent_transcodes.get(),
+        config.worker_temp_dir.clone(),
+    );
     let worker_video_repo_clone = Arc::clone(&video_repository);
     // TODO: use handlers during graceful shutdown to ensure all tasks are properly stopped and no jobs are lost
     let _worker_handle = tokio::spawn(async move { worker.run_worker_loop().await });

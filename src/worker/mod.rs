@@ -1,18 +1,48 @@
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use std::{num::NonZeroU64, path::PathBuf, sync::Arc, time::Duration};
 
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use ulid::Ulid;
 
-use crate::repository::VideoRepository;
+use crate::{media_probe::MediaProbe, repository::VideoRepository, storage::Storage};
 
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.
 pub struct Worker {
+    /// Receiver for video processing jobs sent from the API when uploads are completed.
     rx: mpsc::Receiver<Ulid>,
+
+    /// Repository for updating video status and fetching video records during processing.
+    repository: Arc<dyn VideoRepository>,
+
+    /// Storage client for uploading processed videos to R2.
+    storage: Arc<dyn Storage>,
+
+    /// Semaphore to limit concurrent processing jobs and prevent resource exhaustion.
+    semaphore: Arc<Semaphore>,
+
+    /// Temporary directory for storing intermediate files during video processing.
+    temp_dir: PathBuf,
+
+    /// Media probe for analyzing video files during processing, e.g. to determine if transmuxing is needed.
+    media_probe: Arc<dyn MediaProbe>,
 }
 
 impl Worker {
-    pub fn new(rx: mpsc::Receiver<Ulid>) -> Self {
-        Self { rx }
+    pub fn new(
+        rx: mpsc::Receiver<Ulid>,
+        repository: Arc<dyn VideoRepository>,
+        storage: Arc<dyn Storage>,
+        media_probe: Arc<dyn MediaProbe>,
+        max_concurrent_jobs: usize,
+        temp_dir: PathBuf,
+    ) -> Self {
+        Self {
+            rx,
+            repository,
+            storage,
+            media_probe,
+            semaphore: Arc::new(Semaphore::new(max_concurrent_jobs)),
+            temp_dir,
+        }
     }
 
     /// Main loop for processing video jobs received from the API.
