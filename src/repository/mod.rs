@@ -152,6 +152,28 @@ impl VideoRepository for PgVideoRepository {
 
         Ok(result.rows_affected())
     }
+
+    async fn update_status(&self, ulid: Ulid, status: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "UPDATE videos SET status = $1, updated_at = NOW() WHERE ulid = $2",
+            status,
+            ulid.to_string()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn set_transmux_key(&self, ulid: Ulid, key: &TransmuxKey) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "UPDATE videos SET transmux_key = $1, updated_at = NOW() WHERE ulid = $2",
+            &**key,
+            ulid.to_string()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +191,7 @@ mod tests {
     use std::str::FromStr;
     use ulid::Ulid;
 
-    use crate::domain::{FormatCompatibility, RawUploadKey, UploadContentType};
+    use crate::domain::{ContainerFormat, FormatCompatibility, RawUploadKey, UploadContentType};
 
     fn ulid(value: &str) -> Ulid {
         value.parse::<Ulid>().expect("valid ulid literal")
@@ -512,5 +534,43 @@ mod tests {
         let found_new = repository.find_video_by_ulid(ulid_new).await.unwrap();
         assert!(found_old.is_none());
         assert!(found_new.is_some());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn update_status_updates_status(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+        let ulid = ulid("01ARZ3NDEKTSV4RRFFQ69G5FF1");
+
+        repository
+            .create_pending_video(ulid, &raw_key(ulid), &content_type("video/mp4"), 100)
+            .await
+            .unwrap();
+
+        repository.update_status(ulid, "transmuxing").await.unwrap();
+
+        let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
+        assert_eq!(found.status, "transmuxing");
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn set_transmux_key_sets_key(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+        let ulid = ulid("01ARZ3NDEKTSV4RRFFQ69G5FF1");
+
+        repository
+            .create_pending_video(ulid, &raw_key(ulid), &content_type("video/mp4"), 100)
+            .await
+            .unwrap();
+
+        repository
+            .set_transmux_key(ulid, &TransmuxKey::new(ulid, ContainerFormat::Mp4))
+            .await
+            .unwrap();
+
+        let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
+        assert_eq!(
+            found.transmux_key.as_ref().map(|k| &**k),
+            Some("transmux/01ARZ3NDEKTSV4RRFFQ69G5FF1/output.mp4")
+        );
     }
 }

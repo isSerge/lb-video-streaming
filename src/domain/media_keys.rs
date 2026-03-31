@@ -2,9 +2,24 @@
 
 use std::ops::Deref;
 
+use ulid::Ulid;
+
+use crate::domain::ContainerFormat;
+
 /// Storage key for transmuxed MP4 output.
 #[derive(Debug)]
 pub struct TransmuxKey(String);
+
+impl TransmuxKey {
+    pub fn new(ulid: Ulid, container: ContainerFormat) -> Self {
+        let ext = match container {
+            ContainerFormat::Mp4 => "mp4",
+            ContainerFormat::Webm => "webm",
+            _ => "mp4", // fallback, should not happen
+        };
+        Self(format!("transmux/{}/output.{}", ulid, ext))
+    }
+}
 
 /// Storage key for HLS manifest object.
 #[derive(Debug)]
