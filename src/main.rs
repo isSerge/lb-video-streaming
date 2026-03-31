@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod domain;
+mod file_transfer;
 mod media_probe;
 mod media_transcoder;
 mod repository;
@@ -16,6 +17,8 @@ use storage::{R2Storage, Storage};
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
 use worker::{VideoProcessor, Worker};
+
+use crate::file_transfer::{FileTransfer, HttpFileTransfer};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -50,24 +53,27 @@ async fn main() -> Result<(), AppError> {
     let r2_storage = R2Storage::new(&config);
     tracing::info!(bucket = %config.r2_bucket_name, "R2 storage client ready");
 
-    let ffprobe = Ffprobe::default();
-
     let bind_addr = format!("{}:{}", config.server_host, config.server_port.get());
 
+    // Initialize shared services and state for API handlers and worker tasks.
     let video_repository: Arc<dyn VideoRepository> = Arc::new(video_repository);
     let storage: Arc<dyn Storage> = Arc::new(r2_storage);
-    let media_probe: Arc<dyn MediaProbe> = Arc::new(ffprobe);
+    let media_probe: Arc<dyn MediaProbe> = Arc::new(Ffprobe::default());
     let media_transcoder: Arc<dyn MediaTranscoder> = Arc::new(media_transcoder::Ffmpeg::default());
+    let http_client = reqwest::Client::new(); // Default has no timeout which is desirable
+    let file_transfer: Arc<dyn FileTransfer> = Arc::new(HttpFileTransfer::new(http_client));
 
     // Create a channel for communicating upload completion events to the worker.
     let (worker_tx, worker_rx) = tokio::sync::mpsc::channel(config.worker_channel_buffer_size);
 
     // Spawn worker tasks for processing uploads and sweeping zombies.
+
     let processor = VideoProcessor::new(
         Arc::clone(&video_repository),
         Arc::clone(&storage),
         Arc::clone(&media_probe),
         Arc::clone(&media_transcoder),
+        Arc::clone(&file_transfer),
         PathBuf::from(&config.worker_temp_dir),
     );
     let mut worker = Worker::new(worker_rx, processor, config.max_concurrent_transcodes.get());

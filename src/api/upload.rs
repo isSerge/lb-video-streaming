@@ -12,8 +12,8 @@ use url::Url;
 
 use super::{errors::ApiError, state::AppState};
 use crate::domain::{
-    FormatCompatibility, MaxUploadBytes, MediaMetadata, RawUploadKey, UploadCompletePath,
-    UploadContentType, UploadSizeBytes, VideoMetadataPath,
+    FormatCompatibility, MaxUploadBytes, RawUploadKey, UploadCompletePath, UploadContentType,
+    UploadSizeBytes, VideoMetadataPath,
 };
 
 /// Input payload for requesting a presigned upload URL.

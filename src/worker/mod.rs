@@ -8,6 +8,7 @@ use ulid::Ulid;
 
 use crate::{
     domain::{ContainerFormat, UploadContentTypeError},
+    file_transfer::FileTransferError,
     media_probe::FfprobeError,
     media_transcoder::TranscoderError,
     repository::VideoRepository,
@@ -46,6 +47,9 @@ pub enum WorkerError {
 
     #[error("transcoder error: {0}")]
     Transcoder(#[from] TranscoderError),
+
+    #[error("file transfer error: {0}")]
+    Transfer(#[from] FileTransferError),
 }
 
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.

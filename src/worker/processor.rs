@@ -5,6 +5,7 @@ use ulid::Ulid;
 use super::WorkerError;
 use crate::{
     domain::{TransmuxKey, UploadContentType},
+    file_transfer::FileTransfer,
     media_probe::MediaProbe,
     media_transcoder::MediaTranscoder,
     repository::{VideoRecord, VideoRepository},
@@ -18,6 +19,7 @@ pub struct VideoProcessor {
     storage: Arc<dyn Storage>,
     media_probe: Arc<dyn MediaProbe>,
     transcoder: Arc<dyn MediaTranscoder>,
+    file_transfer: Arc<dyn FileTransfer>,
     temp_root: PathBuf,
 }
 
@@ -27,9 +29,11 @@ impl VideoProcessor {
         storage: Arc<dyn Storage>,
         media_probe: Arc<dyn MediaProbe>,
         transcoder: Arc<dyn MediaTranscoder>,
+        file_transfer: Arc<dyn FileTransfer>,
         temp_root: PathBuf,
     ) -> Self {
         Self {
+            file_transfer,
             repository,
             storage,
             media_probe,
@@ -64,10 +68,11 @@ impl VideoProcessor {
 
         let temp_dir = tempfile::tempdir_in(&self.temp_root)?;
         let raw_path = temp_dir.path().join("input");
-        let output_path = temp_dir.path().join("output"); // extension added below based on target container
 
+        // Download raw file from storage to local temp path for processing
         let raw_url = self.storage.create_download_url(&record.raw_key).await?;
-        // TODO: download file
+        tracing::info!(url = %raw_url, "downloading raw file for transmuxing");
+        self.file_transfer.download(raw_url, &raw_path).await?;
 
         // Probe media info to determine target container format
         let metadata = self.media_probe.probe_file(&raw_path).await?;
@@ -93,11 +98,17 @@ impl VideoProcessor {
             .storage
             .create_transmux_upload_url(&transmux_key, &content_type)
             .await?;
-        // TODO: upload file
 
+        tracing::info!(%ulid, url = %upload_url, "uploading transmuxed file");
+        self.file_transfer
+            .upload(&output_path, upload_url, &content_type)
+            .await?;
+
+        // Set the new transmux key and update status to "transmuxed"
         self.repository
             .set_transmux_key(ulid, &transmux_key)
             .await?;
+        self.repository.update_status(ulid, "transmuxed").await?;
 
         tracing::info!(%ulid, "transmux phase completed");
 
