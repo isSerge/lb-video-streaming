@@ -67,9 +67,8 @@ impl R2Storage {
 
     /// Helper method to generate a presigned PUT URL for a given key and content type.
     async fn presign_put(&self, key: &str, content_type: &str) -> Result<Url, R2StorageError> {
-        let presign_cfg =
-            PresigningConfig::expires_in(Duration::from_secs(self.url_ttl_secs))
-                .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
+        let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(self.url_ttl_secs))
+            .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
 
         let presigned = self
             .client

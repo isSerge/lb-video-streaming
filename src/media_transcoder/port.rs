@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use std::path::Path;
 
-use crate::domain::ContainerFormat;
 use super::TranscoderError;
+use crate::domain::ContainerFormat;
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]

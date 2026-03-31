@@ -1,4 +1,4 @@
-mod port;
+pub mod port;
 pub use port::MediaTranscoder;
 
 use std::path::Path;
