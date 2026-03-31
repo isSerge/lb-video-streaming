@@ -108,7 +108,6 @@ impl VideoProcessor {
         self.repository
             .set_transmux_key(ulid, &transmux_key)
             .await?;
-        self.repository.update_status(ulid, "transmuxed").await?;
 
         tracing::info!(%ulid, "transmux phase completed");
 
@@ -215,11 +214,6 @@ mod tests {
         // Expect status updates to "transmuxing" and then "transmuxed"
         repo.expect_update_status()
             .with(eq(ulid), eq("transmuxing"))
-            .once()
-            .returning(|_, _| Ok(()));
-
-        repo.expect_update_status()
-            .with(eq(ulid), eq("transmuxed"))
             .once()
             .returning(|_, _| Ok(()));
 
