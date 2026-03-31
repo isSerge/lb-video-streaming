@@ -24,31 +24,17 @@ impl Ffprobe {
         }
     }
 
-    /// Build ffprobe command-line arguments for probing a URL with JSON output.
-    fn args(url: &Url) -> Vec<String> {
-        vec![
-            "-v".to_string(),
-            "error".to_string(),
-            "-print_format".to_string(),
-            "json".to_string(),
-            "-show_format".to_string(),
-            "-show_streams".to_string(),
-            url.as_str().to_string(),
-        ]
-    }
-}
-
-impl Default for Ffprobe {
-    fn default() -> Self {
-        Self::new("ffprobe")
-    }
-}
-
-#[async_trait::async_trait]
-impl MediaProbe for Ffprobe {
-    async fn probe_url(&self, url: &Url) -> Result<ProbedMediaMetadata, FfprobeError> {
+    async fn probe_path(&self, path: &str) -> Result<ProbedMediaMetadata, FfprobeError> {
         let output = Command::new(&self.command)
-            .args(Self::args(url))
+            .args([
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                path,
+            ])
             .output()
             .await?;
 
@@ -61,6 +47,27 @@ impl MediaProbe for Ffprobe {
 
         let parsed: FfprobeOutput = serde_json::from_slice(&output.stdout)?;
         Ok(parsed.into())
+    }
+}
+
+impl Default for Ffprobe {
+    fn default() -> Self {
+        Self::new("ffprobe")
+    }
+}
+
+#[async_trait::async_trait]
+impl MediaProbe for Ffprobe {
+    async fn probe_url(&self, url: &Url) -> Result<ProbedMediaMetadata, FfprobeError> {
+        self.probe_path(url.as_str()).await
+    }
+
+    async fn probe_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<ProbedMediaMetadata, FfprobeError> {
+        self.probe_path(path.to_str().ok_or(FfprobeError::InvalidPath)?)
+            .await
     }
 }
 
@@ -165,33 +172,15 @@ pub enum FfprobeError {
 
     #[error("failed to parse ffprobe JSON output: {0}")]
     InvalidJson(#[from] serde_json::Error),
+
+    #[error("invalid file path for ffprobe: cannot convert to string")]
+    InvalidPath,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Ffprobe, FfprobeCodecType, FfprobeOutput, ProbedMediaMetadata};
+    use super::{FfprobeCodecType, FfprobeOutput, ProbedMediaMetadata};
     use crate::domain::{AudioCodec, ContainerFormat, VideoCodec};
-    use url::Url;
-
-    #[test]
-    fn builds_expected_ffprobe_args() {
-        let url =
-            Url::parse("https://cdn.example.com/raw/01ARZ3NDEKTSV4RRFFQ69G5FAV/video").unwrap();
-
-        let args = Ffprobe::args(&url);
-        assert_eq!(
-            args,
-            vec![
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                "https://cdn.example.com/raw/01ARZ3NDEKTSV4RRFFQ69G5FAV/video",
-            ]
-        );
-    }
 
     #[test]
     fn parses_ffprobe_json_output() {
