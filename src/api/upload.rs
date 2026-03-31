@@ -77,12 +77,17 @@ pub async fn mark_upload_complete(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let raw_url = state.config.public_object_url(&row.raw_key)?;
-    let metadata = state.media_probe.probe_url(&raw_url).await?;
+    // Generate a presigned download URL for ffprobe to fetch the uploaded video and extract metadata.
+    let ttl_secs = state.config.presigned_probe_ttl_secs.get();
+    let probe_url = state
+        .storage
+        .create_download_url(&row.raw_key, ttl_secs)
+        .await?;
+    let metadata = state.media_probe.probe_url(&probe_url).await?;
 
     tracing::info!(
         %ulid,
-        raw_url = %raw_url,
+        probe_url = %probe_url,
         container_format = ?metadata.container_format,
         video_codec = ?metadata.video_codec,
         audio_codec = ?metadata.audio_codec,

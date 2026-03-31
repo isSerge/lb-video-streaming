@@ -88,4 +88,24 @@ impl Storage for R2Storage {
 
         Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
     }
+
+    async fn create_download_url(
+        &self,
+        key: &RawUploadKey,
+        ttl_secs: u64,
+    ) -> Result<Url, R2StorageError> {
+        let presign_cfg = PresigningConfig::expires_in(Duration::from_secs(ttl_secs))
+            .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
+
+        let presigned = self
+            .client
+            .get_object()
+            .bucket(&self.bucket_name)
+            .key(&**key)
+            .presigned(presign_cfg)
+            .await
+            .map_err(|e| R2StorageError::Presign(e.to_string()))?;
+
+        Url::parse(&presigned.uri().to_string()).map_err(R2StorageError::from)
+    }
 }

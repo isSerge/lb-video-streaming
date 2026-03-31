@@ -108,6 +108,12 @@ async fn mark_upload_complete_sets_browser_compatible_for_h264_aac_mp4() {
         .withf(|_, compat| *compat == FormatCompatibility::BrowserCompatible)
         .returning(|_, _| Ok(true));
 
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_download_url()
+        .once()
+        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
         Ok(ProbedMediaMetadata {
@@ -117,7 +123,7 @@ async fn mark_upload_complete_sets_browser_compatible_for_h264_aac_mp4() {
         })
     });
 
-    let response = build_app(repo, MockStorage::new(), probe)
+    let response = build_app(repo, storage, probe)
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -144,6 +150,12 @@ async fn mark_upload_complete_sets_transcode_required_for_hevc() {
         .withf(|_, compat| *compat == FormatCompatibility::TranscodeRequired)
         .returning(|_, _| Ok(true));
 
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_download_url()
+        .once()
+        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
         Ok(ProbedMediaMetadata {
@@ -153,7 +165,7 @@ async fn mark_upload_complete_sets_transcode_required_for_hevc() {
         })
     });
 
-    let response = build_app(repo, MockStorage::new(), probe)
+    let response = build_app(repo, storage, probe)
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -199,6 +211,12 @@ async fn mark_upload_complete_returns_500_when_probe_fails() {
         .once()
         .returning(move |_| Ok(Some(video_record(ulid, "pending_upload", false))));
 
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_download_url()
+        .once()
+        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
         Err(FfprobeError::NonZeroExit {
@@ -207,7 +225,7 @@ async fn mark_upload_complete_returns_500_when_probe_fails() {
         })
     });
 
-    let response = build_app(repo, MockStorage::new(), probe)
+    let response = build_app(repo, storage, probe)
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -233,6 +251,12 @@ async fn mark_upload_complete_pushes_ulid_to_worker_channel() {
         .once()
         .returning(|_, _| Ok(true));
 
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_download_url()
+        .once()
+        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
         Ok(ProbedMediaMetadata {
@@ -246,7 +270,7 @@ async fn mark_upload_complete_pushes_ulid_to_worker_channel() {
     let (worker_tx, mut worker_rx) = mpsc::channel(1);
     let app_state = AppState::new(
         Arc::new(repo),
-        Arc::new(MockStorage::new()),
+        Arc::new(storage),
         Arc::new(probe),
         test_config(),
         worker_tx,

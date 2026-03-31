@@ -55,6 +55,10 @@ pub struct Config {
     /// Buffer size for the channel used to communicate upload completion events to the worker.
     #[serde(default = "defaults::worker_channel_buffer_size")]
     pub worker_channel_buffer_size: usize,
+
+    /// TTL in seconds for presigned ffprobe URLs used to fetch metadata after upload.
+    #[serde(default = "defaults::presigned_probe_ttl_secs")]
+    pub presigned_probe_ttl_secs: NonZeroU64,
 }
 
 impl Config {
@@ -172,6 +176,10 @@ mod defaults {
 
     pub fn worker_channel_buffer_size() -> usize {
         100
+    }
+
+    pub fn presigned_probe_ttl_secs() -> NonZeroU64 {
+        NonZeroU64::new(300).expect("default presigned_probe_ttl_secs must be non-zero") // Default: 5 minutes
     }
 }
 

@@ -15,4 +15,11 @@ pub trait Storage: Send + Sync {
         key: &RawUploadKey,
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError>;
+
+    /// Returns a presigned GET URL with a specified TTL, used by ffprobe to fetch metadata after upload.
+    async fn create_download_url(
+        &self,
+        key: &RawUploadKey,
+        ttl_secs: u64,
+    ) -> Result<Url, R2StorageError>;
 }
