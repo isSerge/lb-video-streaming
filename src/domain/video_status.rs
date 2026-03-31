@@ -5,7 +5,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 /// API-facing status of a video in the processing pipeline.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoStatus {
     PendingUpload,
@@ -14,6 +14,19 @@ pub enum VideoStatus {
     Transcoding,
     Ready,
     Failed,
+}
+
+impl AsRef<str> for VideoStatus {
+    fn as_ref(&self) -> &'static str {
+        match self {
+            Self::PendingUpload => "pending_upload",
+            Self::Uploaded => "uploaded",
+            Self::Transmuxing => "transmuxing",
+            Self::Transcoding => "transcoding",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 /// Validation errors when converting persisted status into domain status.

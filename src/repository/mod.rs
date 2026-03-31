@@ -9,7 +9,9 @@ use ulid::Ulid;
 
 use crate::{
     config::Config,
-    domain::{FormatCompatibility, ManifestKey, RawUploadKey, TransmuxKey, UploadContentType},
+    domain::{
+        FormatCompatibility, ManifestKey, RawUploadKey, TransmuxKey, UploadContentType, VideoStatus,
+    },
 };
 
 #[derive(Debug)]
@@ -153,10 +155,10 @@ impl VideoRepository for PgVideoRepository {
         Ok(result.rows_affected())
     }
 
-    async fn update_status(&self, ulid: Ulid, status: &str) -> Result<(), sqlx::Error> {
+    async fn update_status(&self, ulid: Ulid, status: VideoStatus) -> Result<(), sqlx::Error> {
         sqlx::query!(
             "UPDATE videos SET status = $1, updated_at = NOW() WHERE ulid = $2",
-            status,
+            status.as_ref(),
             ulid.to_string()
         )
         .execute(&self.pool)
@@ -218,7 +220,7 @@ mod tests {
 
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
         assert_eq!(found.ulid, ulid);
-        assert_eq!(found.status, "pending_upload");
+        assert_eq!(found.status, VideoStatus::PendingUpload.as_ref());
         assert_eq!(&*found.raw_key, &*raw_key);
         assert!(!found.browser_compatible);
         assert!(!found.transmux_required);
@@ -271,7 +273,7 @@ mod tests {
         assert!(updated);
 
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
-        assert_eq!(found.status, "uploaded");
+        assert_eq!(found.status, VideoStatus::Uploaded.as_ref());
     }
 
     #[sqlx::test(migrations = "./migrations")]
@@ -305,7 +307,7 @@ mod tests {
         assert!(updated);
 
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
-        assert_eq!(found.status, "uploaded");
+        assert_eq!(found.status, VideoStatus::Uploaded.as_ref());
         assert!(found.browser_compatible);
         assert!(!found.transmux_required);
         assert!(!found.transcode_required);
@@ -335,6 +337,7 @@ mod tests {
         .unwrap();
 
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
+        assert_eq!(found.status, VideoStatus::PendingUpload.as_ref());
         assert_eq!(
             found.transmux_key.as_ref().map(|k| &**k),
             Some("transmux/01ARZ3NDEKTSV4RRFFQ69G5FB2/output.mp4")
@@ -360,11 +363,11 @@ mod tests {
 
         // Insert rows with specific statuses
         for (u, status) in [
-            (u_uploaded, "uploaded"),
-            (u_transmuxing, "transmuxing"),
-            (u_transcoding, "transcoding"),
-            (u_ready, "ready"),
-            (u_pending, "pending_upload"),
+            (u_uploaded, VideoStatus::Uploaded.as_ref()),
+            (u_transmuxing, VideoStatus::Transmuxing.as_ref()),
+            (u_transcoding, VideoStatus::Transcoding.as_ref()),
+            (u_ready, VideoStatus::Ready.as_ref()),
+            (u_pending, VideoStatus::PendingUpload.as_ref()),
         ] {
             repository
                 .create_pending_video(u, &raw_key(u), &content_type("video/mp4"), 100)
@@ -391,7 +394,7 @@ mod tests {
         // DB statuses should now all be 'uploaded' for those 3
         for u in [u_uploaded, u_transmuxing, u_transcoding] {
             let found = repository.find_video_by_ulid(u).await.unwrap().unwrap();
-            assert_eq!(found.status, "uploaded");
+            assert_eq!(found.status, VideoStatus::Uploaded.as_ref());
         }
 
         // 'ready' and 'pending_upload' should remain untouched
@@ -546,10 +549,13 @@ mod tests {
             .await
             .unwrap();
 
-        repository.update_status(ulid, "transmuxing").await.unwrap();
+        repository
+            .update_status(ulid, VideoStatus::Transmuxing)
+            .await
+            .unwrap();
 
         let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
-        assert_eq!(found.status, "transmuxing");
+        assert_eq!(found.status, VideoStatus::Transmuxing.as_ref());
     }
 
     #[sqlx::test(migrations = "./migrations")]
@@ -664,7 +670,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            "ready"
+            VideoStatus::Ready.as_ref()
         );
         assert_eq!(
             repository
@@ -673,7 +679,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            "uploaded"
+            VideoStatus::Uploaded.as_ref()
         );
     }
 }

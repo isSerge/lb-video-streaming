@@ -4,7 +4,7 @@ use ulid::Ulid;
 
 use super::WorkerError;
 use crate::{
-    domain::{TransmuxKey, UploadContentType},
+    domain::{TransmuxKey, UploadContentType, VideoStatus},
     file_transfer::FileTransfer,
     media_probe::MediaProbe,
     media_transcoder::MediaTranscoder,
@@ -64,7 +64,9 @@ impl VideoProcessor {
         tracing::info!(%ulid, "starting transmux");
 
         // Update status to "transmuxing" before starting the operation
-        self.repository.update_status(ulid, "transmuxing").await?;
+        self.repository
+            .update_status(ulid, VideoStatus::Transmuxing)
+            .await?;
 
         let temp_dir = tempfile::tempdir_in(&self.temp_root)?;
         let raw_path = temp_dir.path().join("input");
@@ -104,12 +106,15 @@ impl VideoProcessor {
             .upload(&output_path, upload_url, &content_type)
             .await?;
 
-        // Set the new transmux key and update status to "transmuxed"
+        // Set the new transmux key and update status to "transcoding" after successful upload
         self.repository
             .set_transmux_key(ulid, &transmux_key)
             .await?;
+        self.repository
+            .update_status(ulid, VideoStatus::Transcoding)
+            .await?;
 
-        tracing::info!(%ulid, "transmux phase completed");
+        tracing::info!(%ulid, "transmux phase completed, starting transcoding");
 
         Ok(())
     }
@@ -211,9 +216,14 @@ mod tests {
             .once()
             .returning(move |_| Ok(Some(mock_video_record(ulid, true))));
 
-        // Expect status updates to "transmuxing" and then "transmuxed"
+        // Expect status updates to "transmuxing" and then "transcoding"
         repo.expect_update_status()
-            .with(eq(ulid), eq("transmuxing"))
+            .with(eq(ulid), eq(VideoStatus::Transmuxing))
+            .once()
+            .returning(|_, _| Ok(()));
+
+        repo.expect_update_status()
+            .with(eq(ulid), eq(VideoStatus::Transcoding))
             .once()
             .returning(|_, _| Ok(()));
 
@@ -315,7 +325,7 @@ mod tests {
 
         // Expect status update to "transmuxing" before probing
         repo.expect_update_status()
-            .with(eq(ulid), eq("transmuxing"))
+            .with(eq(ulid), eq(VideoStatus::Transmuxing))
             .once()
             .returning(|_, _| Ok(()));
 

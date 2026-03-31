@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use std::num::NonZeroU64;
 use ulid::Ulid;
 
-use crate::domain::{FormatCompatibility, RawUploadKey, TransmuxKey, UploadContentType};
+use crate::domain::{
+    FormatCompatibility, RawUploadKey, TransmuxKey, UploadContentType, VideoStatus,
+};
 
 use super::VideoRecord;
 
@@ -53,7 +55,7 @@ pub trait VideoRepository: Send + Sync {
     ) -> Result<u64, sqlx::Error>;
 
     /// Update the processing status of a video job, used by the worker to mark progress.
-    async fn update_status(&self, ulid: Ulid, status: &str) -> Result<(), sqlx::Error>;
+    async fn update_status(&self, ulid: Ulid, status: VideoStatus) -> Result<(), sqlx::Error>;
 
     /// Set the R2 key for a successfully processed video, used by the worker after uploading the output.
     async fn set_transmux_key(&self, ulid: Ulid, key: &TransmuxKey) -> Result<(), sqlx::Error>;

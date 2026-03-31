@@ -199,7 +199,7 @@ pub enum FfprobeError {
 #[cfg(test)]
 mod tests {
     use super::{FfprobeCodecType, FfprobeOutput};
-    use crate::domain::{AudioCodec, ContainerFormat, MediaMetadata, VideoCodec};
+    use crate::domain::{ContainerFormat, MediaMetadata};
 
     #[test]
     fn parses_ffprobe_json_output() {
