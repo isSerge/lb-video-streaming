@@ -78,10 +78,7 @@ pub async fn mark_upload_complete(
         .ok_or(ApiError::NotFound)?;
 
     // Generate a presigned download URL for ffprobe to fetch the uploaded video and extract metadata.
-    let probe_url = state
-        .storage
-        .create_download_url(&row.raw_key)
-        .await?;
+    let probe_url = state.storage.create_download_url(&row.raw_key).await?;
     let metadata = state.media_probe.probe_url(&probe_url).await?;
 
     tracing::info!(
@@ -93,11 +90,7 @@ pub async fn mark_upload_complete(
         "ffprobe metadata extracted"
     );
 
-    let compatibility = FormatCompatibility::from(MediaMetadata {
-        container_format: metadata.container_format,
-        video_codec: metadata.video_codec,
-        audio_codec: metadata.audio_codec,
-    });
+    let compatibility = FormatCompatibility::from(metadata);
 
     let found = state
         .video_repository

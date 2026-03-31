@@ -13,8 +13,10 @@ use url::Url;
 use crate::{
     api::{AppState, router},
     config::Config,
-    domain::{AudioCodec, ContainerFormat, FormatCompatibility, RawUploadKey, VideoCodec},
-    media_probe::{FfprobeError, ProbedMediaMetadata, port::MockMediaProbe},
+    domain::{
+        AudioCodec, ContainerFormat, FormatCompatibility, MediaMetadata, RawUploadKey, VideoCodec,
+    },
+    media_probe::{FfprobeError, port::MockMediaProbe},
     repository::{VideoRecord, port::MockVideoRepository},
     storage::port::MockStorage,
 };
@@ -116,7 +118,7 @@ async fn mark_upload_complete_sets_browser_compatible_for_h264_aac_mp4() {
 
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
-        Ok(ProbedMediaMetadata {
+        Ok(MediaMetadata {
             container_format: Some(ContainerFormat::Mp4),
             video_codec: Some(VideoCodec::H264),
             audio_codec: Some(AudioCodec::Aac),
@@ -158,7 +160,7 @@ async fn mark_upload_complete_sets_transcode_required_for_hevc() {
 
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
-        Ok(ProbedMediaMetadata {
+        Ok(MediaMetadata {
             container_format: Some(ContainerFormat::Matroska),
             video_codec: Some(VideoCodec::Hevc),
             audio_codec: Some(AudioCodec::Flac),
@@ -259,7 +261,7 @@ async fn mark_upload_complete_pushes_ulid_to_worker_channel() {
 
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
-        Ok(ProbedMediaMetadata {
+        Ok(MediaMetadata {
             container_format: Some(ContainerFormat::Mp4),
             video_codec: Some(VideoCodec::H264),
             audio_codec: Some(AudioCodec::Aac),

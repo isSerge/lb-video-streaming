@@ -7,7 +7,7 @@ use thiserror::Error;
 use tokio::process::Command;
 use url::Url;
 
-use crate::domain::{AudioCodec, ContainerFormat, VideoCodec};
+use crate::domain::{AudioCodec, ContainerFormat, MediaMetadata, VideoCodec};
 
 /// Wrapper around the `ffprobe` binary.
 #[allow(dead_code)]
@@ -24,7 +24,7 @@ impl Ffprobe {
         }
     }
 
-    async fn probe_path(&self, path: &str) -> Result<ProbedMediaMetadata, FfprobeError> {
+    async fn probe_path(&self, path: &str) -> Result<MediaMetadata, FfprobeError> {
         let output = Command::new(&self.command)
             .args([
                 "-v",
@@ -58,14 +58,11 @@ impl Default for Ffprobe {
 
 #[async_trait::async_trait]
 impl MediaProbe for Ffprobe {
-    async fn probe_url(&self, url: &Url) -> Result<ProbedMediaMetadata, FfprobeError> {
+    async fn probe_url(&self, url: &Url) -> Result<MediaMetadata, FfprobeError> {
         self.probe_path(url.as_str()).await
     }
 
-    async fn probe_file(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<ProbedMediaMetadata, FfprobeError> {
+    async fn probe_file(&self, path: &std::path::Path) -> Result<MediaMetadata, FfprobeError> {
         self.probe_path(path.to_str().ok_or(FfprobeError::InvalidPath)?)
             .await
     }
@@ -106,15 +103,8 @@ struct FfprobeFormat {
     _format_long_name: Option<String>,
 }
 
-/// Normalized media metadata extracted from ffprobe output, used by the API.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ProbedMediaMetadata {
-    pub container_format: Option<ContainerFormat>,
-    pub video_codec: Option<VideoCodec>,
-    pub audio_codec: Option<AudioCodec>,
-}
-
-impl From<FfprobeOutput> for ProbedMediaMetadata {
+/// Conversion from ffprobe output to our normalized media metadata used by the API.
+impl From<FfprobeOutput> for MediaMetadata {
     fn from(output: FfprobeOutput) -> Self {
         // Helper to trim and filter out empty codec names
         fn normalized<'a>(value: Option<&'a str>) -> Option<&'a str> {
@@ -179,8 +169,8 @@ pub enum FfprobeError {
 
 #[cfg(test)]
 mod tests {
-    use super::{FfprobeCodecType, FfprobeOutput, ProbedMediaMetadata};
-    use crate::domain::{AudioCodec, ContainerFormat, VideoCodec};
+    use super::{FfprobeCodecType, FfprobeOutput};
+    use crate::domain::{AudioCodec, ContainerFormat, MediaMetadata, VideoCodec};
 
     #[test]
     fn parses_ffprobe_json_output() {
@@ -227,7 +217,7 @@ mod tests {
     fn metadata_from_output_handles_missing_fields() {
         let raw = r#"{ "streams": [{ "codec_type": "video" }], "format": null }"#;
         let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
-        let metadata = ProbedMediaMetadata::from(output);
+        let metadata = MediaMetadata::from(output);
 
         assert_eq!(metadata.container_format, None);
         assert_eq!(metadata.video_codec, None);
@@ -250,7 +240,7 @@ mod tests {
         "#;
 
         let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
-        let metadata = ProbedMediaMetadata::from(output);
+        let metadata = MediaMetadata::from(output);
 
         assert_eq!(metadata.container_format, Some(ContainerFormat::Mp4));
         assert_eq!(metadata.video_codec, None);
@@ -270,7 +260,7 @@ mod tests {
         "#;
 
         let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
-        let metadata = ProbedMediaMetadata::from(output);
+        let metadata = MediaMetadata::from(output);
 
         // Should prefer WebM over MP4 if both are listed
         assert_eq!(metadata.container_format, Some(ContainerFormat::Webm));
@@ -292,7 +282,7 @@ mod tests {
         "#; // MP4 and WebM are not listed, so should fall back to MOV as container format
 
         let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
-        let metadata = ProbedMediaMetadata::from(output);
+        let metadata = MediaMetadata::from(output);
 
         assert_eq!(metadata.container_format, Some(ContainerFormat::Mov));
         assert_eq!(metadata.video_codec, Some(VideoCodec::H264));
