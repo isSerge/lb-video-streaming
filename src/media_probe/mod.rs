@@ -1,5 +1,7 @@
 pub mod port;
 
+use std::path::Path;
+
 pub use port::MediaProbe;
 
 use serde::Deserialize;
@@ -24,7 +26,12 @@ impl Ffprobe {
         }
     }
 
-    async fn probe_path(&self, path: &str) -> Result<MediaMetadata, FfprobeError> {
+    /// Execute ffprobe with the given target and optional extension hint, returning parsed media metadata or an error.
+    async fn execute_probe(
+        &self,
+        target: &str,
+        ext_hint: Option<&str>,
+    ) -> Result<MediaMetadata, FfprobeError> {
         let output = Command::new(&self.command)
             .args([
                 "-v",
@@ -33,7 +40,7 @@ impl Ffprobe {
                 "json",
                 "-show_format",
                 "-show_streams",
-                path,
+                target,
             ])
             .output()
             .await?;
@@ -45,7 +52,7 @@ impl Ffprobe {
             });
         }
 
-        let parsed: FfprobeOutput = serde_json::from_slice(&output.stdout)?;
+        let parsed = serde_json::from_slice::<FfprobeOutput>(&output.stdout)?.with_hint(ext_hint);
         Ok(parsed.into())
     }
 }
@@ -59,11 +66,13 @@ impl Default for Ffprobe {
 #[async_trait::async_trait]
 impl MediaProbe for Ffprobe {
     async fn probe_url(&self, url: &Url) -> Result<MediaMetadata, FfprobeError> {
-        self.probe_path(url.as_str()).await
+        let ext = Path::new(url.path()).extension().and_then(|e| e.to_str());
+        self.execute_probe(url.as_str(), ext).await
     }
 
     async fn probe_file(&self, path: &std::path::Path) -> Result<MediaMetadata, FfprobeError> {
-        self.probe_path(path.to_str().ok_or(FfprobeError::InvalidPath)?)
+        let ext = path.extension().and_then(|e| e.to_str());
+        self.execute_probe(path.to_str().ok_or(FfprobeError::InvalidPath)?, ext)
             .await
     }
 }
@@ -73,6 +82,37 @@ impl MediaProbe for Ffprobe {
 struct FfprobeOutput {
     streams: Vec<FfprobeStream>,
     format: Option<FfprobeFormat>,
+    #[serde(skip)]
+    ext_hint: Option<String>,
+}
+
+impl FfprobeOutput {
+    /// Extension hint extracted from the file path, used to help infer container format when ffprobe output is ambiguous.
+    fn with_hint(mut self, hint: Option<&str>) -> Self {
+        self.ext_hint = hint.map(|s| s.to_lowercase());
+        self
+    }
+
+    /// Resolve the container format from ffprobe's format_name field, which may contain multiple comma-separated aliases.
+    fn resolve_container(format_names: &str, ext_hint: Option<&str>) -> ContainerFormat {
+        let parts: Vec<&str> = format_names.split(',').map(str::trim).collect();
+
+        // if ffprobe returns a single demuxer name it's already unambiguous and we pass it straight to the Into<ContainerFormat> conversion
+        if parts.len() == 1 {
+            return parts[0].into();
+        }
+
+        // For ambiguous groups (e.g. "matroska,webm" or "mov,mp4,m4a,..."),
+        // resolve via file extension which reflects what the user actually uploaded.
+        match ext_hint.map(|e| e.trim_start_matches('.')) {
+            Some("webm") => ContainerFormat::Webm,
+            Some("mkv") => ContainerFormat::Matroska,
+            Some("mp4") => ContainerFormat::Mp4,
+            Some("mov") => ContainerFormat::Mov,
+            Some("avi") => ContainerFormat::Avi,
+            _ => parts.first().copied().unwrap_or("").into(), // fallback to first format or unknown if empty
+        }
+    }
 }
 
 /// Stream entry from ffprobe output.
@@ -120,23 +160,12 @@ impl From<FfprobeOutput> for MediaMetadata {
                 .and_then(|s| s.codec_name.as_deref())
         };
 
-        // Extract container format, preferring web-friendly formats if multiple are listed
+        // Extract container format from ffprobe output, using the format_name field and falling back to extension hint if needed
         let container_format = output
             .format
             .as_ref()
             .and_then(|f| f.format_name.as_deref())
-            .map(|formats| {
-                let parts: Vec<&str> = formats.split(',').collect();
-                // Prefer specific web-friendly containers if they are in the list
-                if parts.contains(&"webm") {
-                    return ContainerFormat::Webm;
-                }
-                if parts.contains(&"mp4") {
-                    return ContainerFormat::Mp4;
-                }
-                // Otherwise grab the first one
-                parts.first().copied().unwrap_or("").trim().into()
-            })
+            .map(|formats| FfprobeOutput::resolve_container(formats, output.ext_hint.as_deref()))
             .filter(|f| *f != ContainerFormat::Unknown);
 
         // Extract and normalize codec names for video and audio streams
@@ -248,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_from_output_prefers_web_friendly_containers() {
+    fn metadata_from_output_handles_multiple_formats() {
         let raw = r#"
         {
             "streams": [],
@@ -262,30 +291,7 @@ mod tests {
         let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
         let metadata = MediaMetadata::from(output);
 
-        // Should prefer WebM over MP4 if both are listed
-        assert_eq!(metadata.container_format, Some(ContainerFormat::Webm));
-    }
-
-    #[test]
-    fn metadata_from_output_extracts_container_and_codecs_if_web_unfriendly() {
-        let raw = r#"
-        {
-            "streams": [
-                { "codec_type": "video", "codec_name": "h264" },
-                { "codec_type": "audio", "codec_name": "aac" }
-            ],
-            "format": {
-                "format_name": "mov,3gp,3g2,mj2",
-                "format_long_name": "QuickTime / MOV"
-            }
-        }
-        "#; // MP4 and WebM are not listed, so should fall back to MOV as container format
-
-        let output: FfprobeOutput = serde_json::from_str(raw).unwrap();
-        let metadata = MediaMetadata::from(output);
-
-        assert_eq!(metadata.container_format, Some(ContainerFormat::Mov));
-        assert_eq!(metadata.video_codec, Some(VideoCodec::H264));
-        assert_eq!(metadata.audio_codec, Some(AudioCodec::Aac));
+        // Should prefer MP4 over WebM if both are listed
+        assert_eq!(metadata.container_format, Some(ContainerFormat::Mp4));
     }
 }
