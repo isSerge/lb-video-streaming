@@ -11,6 +11,7 @@ pub enum VideoStatus {
     PendingUpload,
     Uploaded,
     Transmuxing,
+    Transcoding,
     Ready,
     Failed,
 }
@@ -30,6 +31,7 @@ impl FromStr for VideoStatus {
             "pending_upload" => Ok(Self::PendingUpload),
             "uploaded" => Ok(Self::Uploaded),
             "transmuxing" => Ok(Self::Transmuxing),
+            "transcoding" => Ok(Self::Transcoding),
             "ready" => Ok(Self::Ready),
             "failed" => Ok(Self::Failed),
             _ => Err(VideoStatusError::Invalid(value.to_string())),
@@ -50,6 +52,7 @@ pub mod typestate {
     pub struct PendingUpload;
     pub struct Uploaded;
     pub struct Transmuxing;
+    pub struct Transcoding;
     pub struct Ready;
     pub struct Failed;
 
@@ -63,6 +66,10 @@ pub mod typestate {
 
     impl StatusMarker for Transmuxing {
         const STATUS: VideoStatus = VideoStatus::Transmuxing;
+    }
+
+    impl StatusMarker for Transcoding {
+        const STATUS: VideoStatus = VideoStatus::Transcoding;
     }
 
     impl StatusMarker for Ready {
@@ -123,6 +130,16 @@ pub mod typestate {
             VideoState::default()
         }
     }
+
+    impl VideoState<Transcoding> {
+        pub fn mark_ready(self) -> VideoState<Ready> {
+            VideoState::default()
+        }
+
+        pub fn fail(self) -> VideoState<Failed> {
+            VideoState::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +165,12 @@ mod tests {
     fn parses_transmuxing_status() {
         let status: VideoStatus = "transmuxing".parse().unwrap();
         assert!(matches!(status, VideoStatus::Transmuxing));
+    }
+
+    #[test]
+    fn parses_transcoding_status() {
+        let status: VideoStatus = "transcoding".parse().unwrap();
+        assert!(matches!(status, VideoStatus::Transcoding));
     }
 
     #[test]
