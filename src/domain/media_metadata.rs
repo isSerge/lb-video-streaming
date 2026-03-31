@@ -22,6 +22,24 @@ impl ContainerFormat {
     pub fn is_transmux_target(&self) -> bool {
         matches!(self, Self::Mp4 | Self::Webm)
     }
+
+    /// Returns the file extension associated with this container format.
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::Mp4 => "mp4",
+            Self::Webm => "webm",
+            _ => "bin", // fallback for unknown
+        }
+    }
+
+    /// Returns the MIME type associated with this container format, used for API responses and storage metadata.
+    pub fn mime_type_str(&self) -> &'static str {
+        match self {
+            Self::Mp4 => "video/mp4",
+            Self::Webm => "video/webm",
+            _ => "application/octet-stream", // fallback for unknown
+        }
+    }
 }
 
 /// Normalized video codec types relevant for compatibility checks and API responses.

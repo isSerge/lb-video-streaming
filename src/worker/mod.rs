@@ -1,55 +1,73 @@
-use std::{num::NonZeroU64, path::PathBuf, sync::Arc, time::Duration};
+mod processor;
 
+pub use processor::VideoProcessor;
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc};
 use ulid::Ulid;
 
 use crate::{
-    media_probe::MediaProbe, media_transcoder::MediaTranscoder, repository::VideoRepository,
-    storage::Storage,
+    domain::{ContainerFormat, UploadContentTypeError},
+    media_probe::FfprobeError,
+    media_transcoder::TranscoderError,
+    repository::VideoRepository,
+    storage::R2StorageError,
 };
+
+/// Errors that can occur during worker operations, including video processing and cleanup tasks.
+#[derive(Debug, Error)]
+pub enum WorkerError {
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("storage error: {0}")]
+    Storage(#[from] R2StorageError),
+
+    #[error("media probe error: {0}")]
+    MediaProbe(#[from] FfprobeError),
+
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("ffmpeg transmux failed: {0}")]
+    Ffmpeg(String),
+
+    #[error("video not found: {0}")]
+    NotFound(Ulid),
+
+    #[error("invalid upload content type: {0}")]
+    InvalidContentType(#[from] UploadContentTypeError),
+
+    #[error("unsupported container for transmux: {0:?}")]
+    UnsupportedContainer(ContainerFormat),
+
+    #[error("cannot determine transmux target container")]
+    NoTargetContainer,
+
+    #[error("transcoder error: {0}")]
+    Transcoder(#[from] TranscoderError),
+}
 
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.
 pub struct Worker {
     /// Receiver for video processing jobs sent from the API when uploads are completed.
     rx: mpsc::Receiver<Ulid>,
-
-    /// Repository for updating video status and fetching video records during processing.
-    repository: Arc<dyn VideoRepository>,
-
-    /// Storage client for uploading processed videos to R2.
-    storage: Arc<dyn Storage>,
-
+    /// Core processor that encapsulates the logic for handling video processing steps like probing, transmuxing, and transcoding.
+    processor: VideoProcessor,
     /// Semaphore to limit concurrent processing jobs and prevent resource exhaustion.
     semaphore: Arc<Semaphore>,
-
-    /// Temporary directory for storing intermediate files during video processing.
-    temp_dir: PathBuf,
-
-    /// Media probe for analyzing video files during processing, e.g. to determine if transmuxing is needed.
-    media_probe: Arc<dyn MediaProbe>,
-
-    /// Media transcoder for performing transcoding and transmuxing operations on video files.
-    transcoder: Arc<dyn MediaTranscoder>,
 }
 
 impl Worker {
     pub fn new(
         rx: mpsc::Receiver<Ulid>,
-        repository: Arc<dyn VideoRepository>,
-        storage: Arc<dyn Storage>,
-        media_probe: Arc<dyn MediaProbe>,
-        transcoder: Arc<dyn MediaTranscoder>,
+        processor: VideoProcessor,
         max_concurrent_jobs: usize,
-        temp_dir: PathBuf,
     ) -> Self {
         Self {
             rx,
-            repository,
-            storage,
-            media_probe,
-            transcoder,
+            processor,
             semaphore: Arc::new(Semaphore::new(max_concurrent_jobs)),
-            temp_dir,
         }
     }
 
@@ -58,13 +76,14 @@ impl Worker {
         tracing::info!("worker loop started");
 
         while let Some(ulid) = self.rx.recv().await {
-            tracing::info!(%ulid, "worker received job");
-
-            // TODO (Step 5 & 6):
-            // 1. Fetch video record
-            // 2. Transmux (if required)
-            // 3. Transcode to HLS
-            // 4. Update status & upload to R2
+            let permit = self.semaphore.clone().acquire_owned().await.unwrap();
+            let processor = self.processor.clone();
+            tokio::spawn(async move {
+                if let Err(e) = processor.process(ulid).await {
+                    tracing::error!(%ulid, error = %e, "failed to process video");
+                }
+                drop(permit);
+            });
         }
     }
 

@@ -11,10 +11,11 @@ use config::Config;
 use media_probe::{Ffprobe, MediaProbe};
 use media_transcoder::MediaTranscoder;
 use repository::{PgVideoRepository, VideoRepository};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use storage::{R2Storage, Storage};
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
+use worker::{VideoProcessor, Worker};
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -62,20 +63,19 @@ async fn main() -> Result<(), AppError> {
     let (worker_tx, worker_rx) = tokio::sync::mpsc::channel(config.worker_channel_buffer_size);
 
     // Spawn worker tasks for processing uploads and sweeping zombies.
-    let mut worker = worker::Worker::new(
-        worker_rx,
+    let processor = VideoProcessor::new(
         Arc::clone(&video_repository),
         Arc::clone(&storage),
         Arc::clone(&media_probe),
         Arc::clone(&media_transcoder),
-        config.max_concurrent_transcodes.get(),
-        config.worker_temp_dir.clone(),
+        PathBuf::from(&config.worker_temp_dir),
     );
+    let mut worker = Worker::new(worker_rx, processor, config.max_concurrent_transcodes.get());
     let worker_video_repo_clone = Arc::clone(&video_repository);
     // TODO: use handlers during graceful shutdown to ensure all tasks are properly stopped and no jobs are lost
     let _worker_handle = tokio::spawn(async move { worker.run_worker_loop().await });
     let _cleanup_handle = tokio::spawn(async move {
-        worker::Worker::run_cleanup(
+        Worker::run_cleanup(
             worker_video_repo_clone,
             config.zombie_timeout_secs,
             config.zombie_sweep_interval_secs,
