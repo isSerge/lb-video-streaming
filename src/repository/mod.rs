@@ -1,5 +1,7 @@
 pub mod port;
 
+use std::num::NonZeroU64;
+
 pub use port::VideoRepository;
 
 use sqlx::PgPool;
@@ -105,6 +107,38 @@ impl VideoRepository for PgVideoRepository {
                 transcode_required: r.transcode_required,
             }
         }))
+    }
+
+    async fn recover_pending_jobs(&self) -> Result<Vec<Ulid>, sqlx::Error> {
+        // Reset any jobs that were in a pending state but never completed (e.g. due to a crash)
+        sqlx::query!(
+            "UPDATE videos SET status = 'uploaded' WHERE status IN ('transmuxing', 'transcoding')"
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Fetch all jobs that need processing
+        let rows = sqlx::query!("SELECT ulid FROM videos WHERE status = 'uploaded'")
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows.into_iter().map(|r| r.ulid.parse().unwrap()).collect())
+    }
+
+    async fn mark_zombie_jobs_failed(&self, timeout: NonZeroU64) -> Result<u64, sqlx::Error> {
+        // Safe cast: 2 hours is 7,200 seconds, well within i32 limits.
+        let timeout_secs = timeout.get() as i32;
+
+        let result = sqlx::query!(
+            "UPDATE videos SET status = 'failed' 
+             WHERE status IN ('transmuxing', 'transcoding') 
+             AND updated_at < NOW() - ($1::int * INTERVAL '1 second')",
+            timeout_secs
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 }
 
@@ -278,5 +312,144 @@ mod tests {
         assert!(found.browser_compatible);
         assert!(found.transmux_required);
         assert!(!found.transcode_required);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn recover_pending_jobs_resets_processing_states_and_returns_all_uploaded(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+
+        let u_uploaded = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC1");
+        let u_transmuxing = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC2");
+        let u_transcoding = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC3");
+        let u_ready = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC4");
+        let u_pending = ulid("01ARZ3NDEKTSV4RRFFQ69G5FC5");
+
+        // Insert rows with specific statuses
+        for (u, status) in [
+            (u_uploaded, "uploaded"),
+            (u_transmuxing, "transmuxing"),
+            (u_transcoding, "transcoding"),
+            (u_ready, "ready"),
+            (u_pending, "pending_upload"),
+        ] {
+            repository
+                .create_pending_video(u, &raw_key(u), &content_type("video/mp4"), 100)
+                .await
+                .unwrap();
+            sqlx::query!(
+                "UPDATE videos SET status = $1 WHERE ulid = $2",
+                status,
+                u.to_string()
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let recovered = repository.recover_pending_jobs().await.unwrap();
+
+        // Should return the 3 jobs that need processing
+        assert_eq!(recovered.len(), 3);
+        assert!(recovered.contains(&u_uploaded));
+        assert!(recovered.contains(&u_transmuxing));
+        assert!(recovered.contains(&u_transcoding));
+
+        // DB statuses should now all be 'uploaded' for those 3
+        for u in [u_uploaded, u_transmuxing, u_transcoding] {
+            let found = repository.find_video_by_ulid(u).await.unwrap().unwrap();
+            assert_eq!(found.status, "uploaded");
+        }
+
+        // 'ready' and 'pending_upload' should remain untouched
+        assert_eq!(
+            repository
+                .find_video_by_ulid(u_ready)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "ready"
+        );
+        assert_eq!(
+            repository
+                .find_video_by_ulid(u_pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending_upload"
+        );
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn mark_zombie_jobs_failed_updates_only_old_processing_jobs(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+        let timeout = NonZeroU64::new(7200).unwrap(); // 2 hours
+
+        let z_transcoding = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD1"); // Zombie transcoding
+        let z_transmuxing = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD2"); // Zombie transmuxing
+        let a_transcoding = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD3"); // Active transcoding
+        let o_uploaded = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD4"); // Old uploaded (not processing)
+
+        // Setup rows
+        for u in [z_transcoding, z_transmuxing, a_transcoding, o_uploaded] {
+            repository
+                .create_pending_video(u, &raw_key(u), &content_type("video/mp4"), 100)
+                .await
+                .unwrap();
+        }
+
+        // Manually backdate updated_at to simulate time passing
+        sqlx::query!("UPDATE videos SET status = 'transcoding', updated_at = NOW() - INTERVAL '3 hours' WHERE ulid = $1", z_transcoding.to_string()).execute(&pool).await.unwrap();
+        sqlx::query!("UPDATE videos SET status = 'transmuxing', updated_at = NOW() - INTERVAL '3 hours' WHERE ulid = $1", z_transmuxing.to_string()).execute(&pool).await.unwrap();
+        sqlx::query!("UPDATE videos SET status = 'uploaded', updated_at = NOW() - INTERVAL '3 hours' WHERE ulid = $1", o_uploaded.to_string()).execute(&pool).await.unwrap();
+
+        // Active job is only 1 hour old (under the 2 hour timeout)
+        sqlx::query!("UPDATE videos SET status = 'transcoding', updated_at = NOW() - INTERVAL '1 hour' WHERE ulid = $1", a_transcoding.to_string()).execute(&pool).await.unwrap();
+
+        let affected = repository.mark_zombie_jobs_failed(timeout).await.unwrap();
+
+        // Only the two old processing jobs should be affected
+        assert_eq!(affected, 2);
+
+        // Verify zombies were failed
+        assert_eq!(
+            repository
+                .find_video_by_ulid(z_transcoding)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "failed"
+        );
+        assert_eq!(
+            repository
+                .find_video_by_ulid(z_transmuxing)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "failed"
+        );
+
+        // Verify active processing and old non-processing jobs were untouched
+        assert_eq!(
+            repository
+                .find_video_by_ulid(a_transcoding)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "transcoding"
+        );
+        assert_eq!(
+            repository
+                .find_video_by_ulid(o_uploaded)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "uploaded"
+        );
     }
 }

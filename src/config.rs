@@ -4,6 +4,9 @@ use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
 use thiserror::Error;
 use url::Url;
 
+// TODO: consider breaking monolithic config into smaller domain-specific structs
+// TODO: double check test coverage for all fields and error cases
+
 /// All runtime configuration for the application.
 /// Mandatory fields have no default and will return an error at startup if absent.
 /// Optional fields fall back to the constants in the `defaults` module.
@@ -41,6 +44,10 @@ pub struct Config {
 
     #[serde(default = "defaults::ui_origin")]
     pub ui_origin: String,
+
+    /// Duration in seconds after which pending uploads are considered "zombies" and eligible for cleanup.
+    #[serde(default = "defaults::zombie_timeout_secs")]
+    pub zombie_timeout_secs: NonZeroU64,
 }
 
 impl Config {
@@ -147,6 +154,10 @@ mod defaults {
 
     pub fn ui_origin() -> String {
         "http://localhost:5173".to_string()
+    }
+
+    pub fn zombie_timeout_secs() -> NonZeroU64 {
+        NonZeroU64::new(7200).expect("default zombie_timeout_secs must be non-zero") // Default: 2 hours
     }
 }
 
