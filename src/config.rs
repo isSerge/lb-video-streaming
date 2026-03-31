@@ -59,6 +59,10 @@ pub struct Config {
     /// TTL in seconds for presigned ffprobe URLs used to fetch metadata after upload.
     #[serde(default = "defaults::presigned_probe_ttl_secs")]
     pub presigned_probe_ttl_secs: NonZeroU64,
+
+    /// Duration in seconds after which pending uploads that haven't completed are automatically marked as failed.
+    #[serde(default = "defaults::pending_upload_ttl_secs")]
+    pub pending_upload_ttl_secs: NonZeroU64,
 }
 
 impl Config {
@@ -167,11 +171,11 @@ mod defaults {
     }
 
     pub fn zombie_timeout_secs() -> NonZeroU64 {
-        NonZeroU64::new(7200).expect("default zombie_timeout_secs must be non-zero") // Default: 2 hours
+        NonZeroU64::new(7200).expect("default zombie_timeout_secs must be non-zero") // 2 hours
     }
 
     pub fn zombie_sweep_interval_secs() -> NonZeroU64 {
-        NonZeroU64::new(3600).expect("default zombie_sweep_interval_secs must be non-zero") // Default: 1 hour
+        NonZeroU64::new(3600).expect("default zombie_sweep_interval_secs must be non-zero") // 1 hour
     }
 
     pub fn worker_channel_buffer_size() -> usize {
@@ -179,7 +183,11 @@ mod defaults {
     }
 
     pub fn presigned_probe_ttl_secs() -> NonZeroU64 {
-        NonZeroU64::new(300).expect("default presigned_probe_ttl_secs must be non-zero") // Default: 5 minutes
+        NonZeroU64::new(300).expect("default presigned_probe_ttl_secs must be non-zero") // 5 minutes
+    }
+
+    pub fn pending_upload_ttl_secs() -> NonZeroU64 {
+        NonZeroU64::new(3600).expect("default pending_upload_ttl_secs must be non-zero") // 1 hour
     }
 }
 

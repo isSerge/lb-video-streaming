@@ -51,11 +51,12 @@ async fn main() -> Result<(), AppError> {
     let worker_video_repo_clone = Arc::clone(&video_repository);
     // TODO: use handlers during graceful shutdown to ensure all tasks are properly stopped and no jobs are lost
     let _worker_handle = tokio::spawn(async move { worker.run_worker_loop().await });
-    let _zombie_sweeper_handle = tokio::spawn(async move {
-        worker::Worker::run_zombie_sweeper(
+    let _cleanup_handle = tokio::spawn(async move {
+        worker::Worker::run_cleanup(
             worker_video_repo_clone,
             config.zombie_timeout_secs,
             config.zombie_sweep_interval_secs,
+            config.pending_upload_ttl_secs,
         )
     });
 

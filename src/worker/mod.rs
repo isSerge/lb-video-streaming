@@ -30,24 +30,42 @@ impl Worker {
         }
     }
 
-    /// Background task to sweep and fail "zombie" jobs that have been pending for too long.
-    /// NOTE: This runs in the same worker process for simplicity, but could be a separate service or scheduled task in a more complex architecture.
-    pub async fn run_zombie_sweeper(
+    /// Background task to sweep and fail zombie jobs and clean up stale pending uploads.
+    /// NOTE: This runs in the same worker process for simplicity, but could be broken out into separate tasks or even a separate service if necessary.
+    pub async fn run_cleanup(
         repository: Arc<dyn VideoRepository>,
         timeout_secs: NonZeroU64,
         sweep_interval_secs: NonZeroU64,
+        pending_upload_ttl_secs: NonZeroU64,
     ) {
-        tracing::info!(timeout_secs, sweep_interval_secs, "zombie sweeper started");
+        tracing::info!(
+            timeout_secs,
+            sweep_interval_secs,
+            pending_upload_ttl_secs,
+            "cleanup task started"
+        );
         let mut interval = tokio::time::interval(Duration::from_secs(sweep_interval_secs.get()));
 
         loop {
             interval.tick().await;
+
+            // 1. Mark stuck processing jobs as failed
             match repository.mark_zombie_jobs_failed(timeout_secs).await {
                 Ok(count) if count > 0 => {
                     tracing::warn!(count, "swept zombie jobs to failed status")
                 }
                 Err(e) => tracing::error!(error = %e, "failed to sweep zombie jobs"),
-                _ => {} // Normal, no zombies found
+                _ => {}
+            }
+
+            // 2. Delete stale pending_upload rows
+            let pending_ttl = Duration::from_secs(pending_upload_ttl_secs.get());
+            match repository.delete_stale_pending_uploads(pending_ttl).await {
+                Ok(count) if count > 0 => {
+                    tracing::info!(count, "deleted stale pending_upload rows")
+                }
+                Err(e) => tracing::error!(error = %e, "failed to delete stale pending uploads"),
+                _ => {}
             }
         }
     }

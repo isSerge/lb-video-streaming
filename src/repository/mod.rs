@@ -1,6 +1,6 @@
 pub mod port;
 
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, time::Duration};
 
 pub use port::VideoRepository;
 
@@ -134,6 +134,18 @@ impl VideoRepository for PgVideoRepository {
              WHERE status IN ('transmuxing', 'transcoding') 
              AND updated_at < NOW() - ($1::int * INTERVAL '1 second')",
             timeout_secs
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_stale_pending_uploads(&self, older_than: Duration) -> Result<u64, sqlx::Error> {
+        let older_than_secs = older_than.as_secs() as f64;
+        let result = sqlx::query!(
+            "DELETE FROM videos WHERE status = 'pending_upload' AND created_at < NOW() - ($1 * INTERVAL '1 second')",
+            older_than_secs
         )
         .execute(&self.pool)
         .await?;
@@ -451,5 +463,54 @@ mod tests {
                 .status,
             "uploaded"
         );
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn delete_stale_pending_uploads_removes_old_rows(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+        let ulid_old = ulid("01ARZ3NDEKTSV4RRFFQ69G5FE1");
+        let ulid_new = ulid("01ARZ3NDEKTSV4RRFFQ69G5FE2");
+
+        // Insert two pending_upload rows
+        repository
+            .create_pending_video(
+                ulid_old,
+                &raw_key(ulid_old),
+                &content_type("video/mp4"),
+                100,
+            )
+            .await
+            .unwrap();
+        repository
+            .create_pending_video(
+                ulid_new,
+                &raw_key(ulid_new),
+                &content_type("video/mp4"),
+                200,
+            )
+            .await
+            .unwrap();
+
+        // Manually backdate one row by 2 hours
+        sqlx::query!(
+            "UPDATE videos SET created_at = NOW() - INTERVAL '2 hours' WHERE ulid = $1",
+            ulid_old.to_string()
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let deleted = repository
+            .delete_stale_pending_uploads(Duration::from_secs(3600))
+            .await
+            .unwrap();
+
+        assert_eq!(deleted, 1);
+
+        // Old row should be gone, new row still there
+        let found_old = repository.find_video_by_ulid(ulid_old).await.unwrap();
+        let found_new = repository.find_video_by_ulid(ulid_new).await.unwrap();
+        assert!(found_old.is_none());
+        assert!(found_new.is_some());
     }
 }

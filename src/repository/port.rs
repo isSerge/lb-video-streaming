@@ -43,4 +43,12 @@ pub trait VideoRepository: Send + Sync {
     ///
     /// Returns the number of jobs that were marked as failed.
     async fn mark_zombie_jobs_failed(&self, timeout: NonZeroU64) -> Result<u64, sqlx::Error>;
+
+    /// Delete rows that have been in `pending_upload` state for longer than the specified duration.
+    ///
+    /// Returns the number of deleted rows.
+    async fn delete_stale_pending_uploads(
+        &self,
+        older_than: std::time::Duration,
+    ) -> Result<u64, sqlx::Error>;
 }
