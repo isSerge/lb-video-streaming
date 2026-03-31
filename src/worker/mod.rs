@@ -3,7 +3,10 @@ use std::{num::NonZeroU64, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{Semaphore, mpsc};
 use ulid::Ulid;
 
-use crate::{media_probe::MediaProbe, repository::VideoRepository, storage::Storage};
+use crate::{
+    media_probe::MediaProbe, media_transcoder::MediaTranscoder, repository::VideoRepository,
+    storage::Storage,
+};
 
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.
 pub struct Worker {
@@ -24,6 +27,9 @@ pub struct Worker {
 
     /// Media probe for analyzing video files during processing, e.g. to determine if transmuxing is needed.
     media_probe: Arc<dyn MediaProbe>,
+
+    /// Media transcoder for performing transcoding and transmuxing operations on video files.
+    transcoder: Arc<dyn MediaTranscoder>,
 }
 
 impl Worker {
@@ -32,6 +38,7 @@ impl Worker {
         repository: Arc<dyn VideoRepository>,
         storage: Arc<dyn Storage>,
         media_probe: Arc<dyn MediaProbe>,
+        transcoder: Arc<dyn MediaTranscoder>,
         max_concurrent_jobs: usize,
         temp_dir: PathBuf,
     ) -> Self {
@@ -40,6 +47,7 @@ impl Worker {
             repository,
             storage,
             media_probe,
+            transcoder,
             semaphore: Arc::new(Semaphore::new(max_concurrent_jobs)),
             temp_dir,
         }

@@ -9,11 +9,24 @@ mod worker;
 
 use config::Config;
 use media_probe::{Ffprobe, MediaProbe};
+use media_transcoder::MediaTranscoder;
 use repository::{PgVideoRepository, VideoRepository};
 use std::sync::Arc;
 use storage::{R2Storage, Storage};
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
+
+#[derive(Debug, Error)]
+enum AppError {
+    #[error("configuration error: {0}")]
+    Config(#[from] config::ConfigError),
+
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("network error: {0}")]
+    Io(#[from] std::io::Error),
+}
 
 // TODO: add graceful shutdown
 #[tokio::main]
@@ -43,6 +56,7 @@ async fn main() -> Result<(), AppError> {
     let video_repository: Arc<dyn VideoRepository> = Arc::new(video_repository);
     let storage: Arc<dyn Storage> = Arc::new(r2_storage);
     let media_probe: Arc<dyn MediaProbe> = Arc::new(ffprobe);
+    let media_transcoder: Arc<dyn MediaTranscoder> = Arc::new(media_transcoder::Ffmpeg::default());
 
     // Create a channel for communicating upload completion events to the worker.
     let (worker_tx, worker_rx) = tokio::sync::mpsc::channel(config.worker_channel_buffer_size);
@@ -53,6 +67,7 @@ async fn main() -> Result<(), AppError> {
         Arc::clone(&video_repository),
         Arc::clone(&storage),
         Arc::clone(&media_probe),
+        Arc::clone(&media_transcoder),
         config.max_concurrent_transcodes.get(),
         config.worker_temp_dir.clone(),
     );
@@ -90,16 +105,4 @@ async fn main() -> Result<(), AppError> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-#[derive(Debug, Error)]
-enum AppError {
-    #[error("configuration error: {0}")]
-    Config(#[from] config::ConfigError),
-
-    #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
-
-    #[error("network error: {0}")]
-    Io(#[from] std::io::Error),
 }
