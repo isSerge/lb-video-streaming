@@ -78,10 +78,9 @@ pub async fn mark_upload_complete(
         .ok_or(ApiError::NotFound)?;
 
     // Generate a presigned download URL for ffprobe to fetch the uploaded video and extract metadata.
-    let ttl_secs = state.config.presigned_probe_ttl_secs.get();
     let probe_url = state
         .storage
-        .create_download_url(&row.raw_key, ttl_secs)
+        .create_download_url(&row.raw_key)
         .await?;
     let metadata = state.media_probe.probe_url(&probe_url).await?;
 

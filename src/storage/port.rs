@@ -16,12 +16,8 @@ pub trait Storage: Send + Sync {
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError>;
 
-    /// Returns a presigned GET URL with a specified TTL, used by ffprobe to fetch metadata after upload.
-    async fn create_download_url(
-        &self,
-        key: &RawUploadKey,
-        ttl_secs: u64,
-    ) -> Result<Url, R2StorageError>;
+    /// Returns a presigned GET URL with a configured TTL, used by ffprobe to fetch metadata after upload.
+    async fn create_download_url(&self, key: &RawUploadKey) -> Result<Url, R2StorageError>;
 
     /// Create a presigned PUT URL for uploading a transmuxed object.
     /// This is used by the worker to upload the output of ffmpeg after processing.

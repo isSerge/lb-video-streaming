@@ -112,7 +112,7 @@ async fn mark_upload_complete_sets_browser_compatible_for_h264_aac_mp4() {
     storage
         .expect_create_download_url()
         .once()
-        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+        .returning(|_| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
 
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
@@ -154,7 +154,7 @@ async fn mark_upload_complete_sets_transcode_required_for_hevc() {
     storage
         .expect_create_download_url()
         .once()
-        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+        .returning(|_| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
 
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
@@ -215,7 +215,7 @@ async fn mark_upload_complete_returns_500_when_probe_fails() {
     storage
         .expect_create_download_url()
         .once()
-        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+        .returning(|_| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
 
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {
@@ -255,7 +255,7 @@ async fn mark_upload_complete_pushes_ulid_to_worker_channel() {
     storage
         .expect_create_download_url()
         .once()
-        .returning(|_, _| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
+        .returning(|_| Ok(Url::parse("https://r2.example.com/presigned-get").unwrap()));
 
     let mut probe = MockMediaProbe::new();
     probe.expect_probe_url().once().returning(|_| {

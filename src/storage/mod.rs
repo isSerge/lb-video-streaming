@@ -17,7 +17,8 @@ use crate::{
 pub struct R2Storage {
     client: Client,
     bucket_name: String,
-    upload_url_ttl_secs: u64,
+    /// TTL for presigned upload and download URLs, configured via environment variables.
+    url_ttl_secs: u64,
 }
 
 #[derive(Debug, Error)]
@@ -60,14 +61,14 @@ impl R2Storage {
         Self {
             client: Client::from_conf(sdk_config),
             bucket_name: config.r2_bucket_name.clone(),
-            upload_url_ttl_secs: config.presigned_upload_ttl_secs.get(),
+            url_ttl_secs: config.presigned_upload_ttl_secs.get(),
         }
     }
 
     /// Helper method to generate a presigned PUT URL for a given key and content type.
     async fn presign_put(&self, key: &str, content_type: &str) -> Result<Url, R2StorageError> {
         let presign_cfg =
-            PresigningConfig::expires_in(Duration::from_secs(self.upload_url_ttl_secs))
+            PresigningConfig::expires_in(Duration::from_secs(self.url_ttl_secs))
                 .map_err(|e| R2StorageError::InvalidTtl(e.to_string()))?;
 
         let presigned = self
@@ -111,12 +112,8 @@ impl Storage for R2Storage {
         self.presign_put(&**key, &**content_type).await
     }
 
-    async fn create_download_url(
-        &self,
-        key: &RawUploadKey,
-        ttl_secs: u64,
-    ) -> Result<Url, R2StorageError> {
-        self.presign_get(&**key, ttl_secs).await
+    async fn create_download_url(&self, key: &RawUploadKey) -> Result<Url, R2StorageError> {
+        self.presign_get(&**key, self.url_ttl_secs).await
     }
 
     async fn create_transmux_upload_url(
