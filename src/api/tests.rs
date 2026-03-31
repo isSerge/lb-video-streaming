@@ -221,6 +221,56 @@ async fn mark_upload_complete_returns_500_when_probe_fails() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+#[tokio::test]
+async fn mark_upload_complete_pushes_ulid_to_worker_channel() {
+    let ulid = Ulid::new();
+
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid()
+        .once()
+        .returning(move |_| Ok(Some(video_record(ulid, "pending_upload", false))));
+    repo.expect_mark_uploaded_with_compatibility()
+        .once()
+        .returning(|_, _| Ok(true));
+
+    let mut probe = MockMediaProbe::new();
+    probe.expect_probe_url().once().returning(|_| {
+        Ok(ProbedMediaMetadata {
+            container_format: Some(ContainerFormat::Mp4),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: Some(AudioCodec::Aac),
+        })
+    });
+
+    // Create a channel with buffer size 1 for testing
+    let (worker_tx, mut worker_rx) = mpsc::channel(1);
+    let app_state = AppState::new(
+        Arc::new(repo),
+        Arc::new(MockStorage::new()),
+        Arc::new(probe),
+        test_config(),
+        worker_tx,
+    );
+    let app = router(app_state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/upload-complete/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify that the ulid was sent to the worker channel
+    let received_ulid = worker_rx.recv().await.unwrap();
+    assert_eq!(received_ulid, ulid);
+}
+
 // ── GET /api/video/{ulid} ────────────────────────────────────────────────────
 
 #[tokio::test]

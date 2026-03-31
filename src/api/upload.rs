@@ -99,8 +99,15 @@ pub async fn mark_upload_complete(
         .video_repository
         .mark_uploaded_with_compatibility(ulid, compatibility)
         .await?;
+
     if !found {
         return Err(ApiError::NotFound);
+    }
+
+    // Push Ulid to the worker queue for processing
+    // TODO: double check if this is reliable enough
+    if let Err(e) = state.worker_tx.send(ulid).await {
+        tracing::error!(%ulid, error = %e, "failed to queue transcode job");
     }
 
     Ok(StatusCode::NO_CONTENT)
