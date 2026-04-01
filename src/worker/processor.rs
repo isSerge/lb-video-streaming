@@ -1,4 +1,4 @@
-use std::{io, path::Path, str::FromStr, sync::Arc, time::Duration};
+use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use tokio::{sync::Semaphore, task::JoinSet};
 use ulid::Ulid;
@@ -289,13 +289,7 @@ impl VideoProcessor {
 
         // Wait for all segment upload tasks to complete, returning an error if any task fails
         while let Some(res) = join_set.join_next().await {
-            match res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(e),
-                Err(e) => {
-                    return Err(WorkerError::Io(io::Error::other(e)));
-                }
-            }
+            res??; // First ? is for JoinSet error, second ? is for the upload task error
         }
 
         Ok(())
