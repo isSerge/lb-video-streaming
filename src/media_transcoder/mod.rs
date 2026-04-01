@@ -1,7 +1,10 @@
 pub mod port;
 pub use port::MediaTranscoder;
 
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 use thiserror::Error;
 use tokio::process::Command;
 
@@ -18,6 +21,9 @@ pub enum TranscoderError {
 
     #[error("unsupported container for transmux: {0:?}")]
     UnsupportedContainer(ContainerFormat),
+
+    #[error("transcode failed: {stderr}")]
+    TranscodeFailed { stderr: String },
 }
 
 /// Wrapper around the `ffmpeg` binary.
@@ -68,5 +74,51 @@ impl MediaTranscoder for Ffmpeg {
         }
 
         Ok(())
+    }
+
+    async fn hls_transcode(
+        &self,
+        input_path: &Path,
+        output_dir: &Path,
+        // progress_tx: Option<tokio::sync::watch::Sender<()>>,
+    ) -> Result<PathBuf, TranscoderError> {
+        let manifest_path = output_dir.join("manifest.m3u8");
+
+        // TODO: double check args and fine tune if necessary
+        let mut cmd = Command::new(&self.command);
+        cmd.arg("-i").arg(input_path.as_os_str());
+
+        // Video filtering: scale to 720p (preserve aspect ratio, even width)
+        cmd.arg("-vf").arg("scale=-2:720");
+
+        // Video bitrate and codec
+        cmd.arg("-b:v").arg("1500k");
+        cmd.arg("-c:v").arg("libx264");
+
+        // Audio codec and bitrate
+        cmd.arg("-c:a").arg("aac");
+        cmd.arg("-b:a").arg("128k");
+
+        // HLS output format
+        cmd.arg("-f").arg("hls");
+        cmd.arg("-hls_time").arg("6"); // 6 seconds per segment
+        cmd.arg("-hls_list_size").arg("0"); // keep all segments
+        cmd.arg("-hls_segment_filename")
+            .arg(output_dir.join("segment_%03d.ts").as_os_str());
+        cmd.arg(&manifest_path);
+
+        let child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+
+        // TODO: implement sending to channel for progress updates by parsing ffmpeg stdout/stderr
+
+        let output = child.wait_with_output().await?;
+
+        if !output.status.success() {
+            // Capture stderr
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(TranscoderError::TranscodeFailed { stderr });
+        }
+
+        Ok(manifest_path)
     }
 }
