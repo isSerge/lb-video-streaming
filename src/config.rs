@@ -67,6 +67,9 @@ pub struct Config {
 
     #[serde(default = "defaults::worker_temp_dir")]
     pub worker_temp_dir: PathBuf,
+
+    #[serde(default = "defaults::segment_upload_concurrency")]
+    pub segment_upload_concurrency: usize,
 }
 
 impl Config {
@@ -199,6 +202,10 @@ mod defaults {
 
     pub fn worker_temp_dir() -> PathBuf {
         std::env::temp_dir().join("video-worker")
+    }
+
+    pub fn segment_upload_concurrency() -> usize {
+        5
     }
 }
 

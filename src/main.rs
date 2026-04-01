@@ -79,6 +79,7 @@ async fn main() -> Result<(), AppError> {
         Arc::clone(&media_transcoder),
         Arc::clone(&file_transfer),
         temp_root,
+        config.segment_upload_concurrency,
     );
     let mut worker = Worker::new(worker_rx, processor, config.max_concurrent_transcodes.get());
     let worker_video_repo_clone = Arc::clone(&video_repository);

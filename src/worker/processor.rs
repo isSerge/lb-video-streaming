@@ -1,10 +1,16 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
+use tokio::{sync::Semaphore, task::JoinSet};
 use ulid::Ulid;
 
 use super::WorkerError;
 use crate::{
-    domain::{TransmuxKey, UploadContentType, VideoStatus},
+    domain::{HLSKey, ManifestKey, TransmuxKey, UploadContentType, VideoStatus},
     file_transfer::FileTransfer,
     media_probe::MediaProbe,
     media_transcoder::MediaTranscoder,
@@ -21,6 +27,7 @@ pub struct VideoProcessor {
     transcoder: Arc<dyn MediaTranscoder>,
     file_transfer: Arc<dyn FileTransfer>,
     temp_root: PathBuf,
+    segment_upload_concurrency: usize,
 }
 
 impl VideoProcessor {
@@ -31,6 +38,7 @@ impl VideoProcessor {
         transcoder: Arc<dyn MediaTranscoder>,
         file_transfer: Arc<dyn FileTransfer>,
         temp_root: PathBuf,
+        segment_upload_concurrency: usize,
     ) -> Self {
         Self {
             file_transfer,
@@ -39,6 +47,7 @@ impl VideoProcessor {
             media_probe,
             transcoder,
             temp_root,
+            segment_upload_concurrency,
         }
     }
 
@@ -118,6 +127,113 @@ impl VideoProcessor {
 
         Ok(())
     }
+
+    /// Run the HLS transcoding step for a video, which includes generating HLS segments and manifest, uploading them to storage, and updating the video record with the manifest key.
+    async fn run_hls_transcode(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
+        tracing::info!(%ulid, "starting HLS transcoding");
+
+        // Create a temp directory
+        let temp_dir = tempfile::tempdir_in(&self.temp_root)?;
+
+        // Download the source file (either raw or transmuxed) to the temp directory for processing
+        let download_url = match &record.transmux_key {
+            Some(transmux_key) => {
+                self.storage
+                    .create_transmux_download_url(transmux_key)
+                    .await
+            }
+            None => self.storage.create_download_url(&record.raw_key).await,
+        }?;
+        let input_path = temp_dir.path().join("input");
+        tracing::info!(url = %download_url, "downloading file for HLS transcoding");
+        self.file_transfer
+            .download(download_url, &input_path)
+            .await?;
+
+        // Define output directory for HLS segments and manifest within the temp directory
+        let output_dir = temp_dir.path().join("hls");
+
+        // TODO: create watch channel and spawn task to update
+
+        // Run the HLS transcoding process, which generates segments and a manifest file
+        let manifest_path = self
+            .transcoder
+            .hls_transcode(&input_path, &output_dir)
+            .await?;
+
+        // Upload manifest
+        let manifest_key = ManifestKey::from(ulid.to_string());
+        let upload_content_type = UploadContentType::from_str("application/vnd.apple.mpegurl")?;
+        let manifest_url = self
+            .storage
+            .create_manifest_upload_url(&manifest_key, &upload_content_type)
+            .await?;
+        tracing::info!(%ulid, url = %manifest_url, "uploading HLS manifest");
+        self.file_transfer
+            .upload(&manifest_path, manifest_url, &upload_content_type)
+            .await?;
+
+        // Upload segments
+        self.upload_segments(ulid, &output_dir).await?;
+
+        // Update timestamp after all uploads
+        self.repository.update_updated_at(ulid).await?;
+
+        Ok(())
+    }
+
+    /// Upload HLS segments in parallel
+    async fn upload_segments(&self, ulid: Ulid, output_dir: &Path) -> Result<(), WorkerError> {
+        let ts_content_type = UploadContentType::from_str("video/MP2T")?;
+        let mut segment_paths = Vec::new();
+        let mut read_dir = tokio::fs::read_dir(output_dir).await?;
+
+        // Collect all segment paths (assuming they have .ts extension)
+        while let Some(entry) = read_dir.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+                segment_paths.push(path);
+            }
+        }
+
+        // Use a semaphore to limit concurrency of segment uploads and a JoinSet to manage the upload tasks
+        let semaphore = Arc::new(Semaphore::new(self.segment_upload_concurrency));
+        let mut join_set = JoinSet::new();
+
+        for path in segment_paths {
+            let filename = path.file_name().unwrap().to_string_lossy().to_string();
+            let segment_key = HLSKey::new(ulid, &filename);
+            let storage = self.storage.clone();
+            let file_transfer = self.file_transfer.clone();
+            let ts_content_type = ts_content_type.clone();
+            let permit = semaphore.clone().acquire_owned().await?;
+
+            // Spawn a task for each segment upload, acquiring a permit from the semaphore to limit concurrency
+            join_set.spawn(async move {
+                let _permit = permit;
+                let segment_url = storage
+                    .create_hls_segment_upload_url(&segment_key, &ts_content_type)
+                    .await?;
+                file_transfer
+                    .upload(&path, segment_url, &ts_content_type)
+                    .await?;
+                Ok::<_, WorkerError>(())
+            });
+        }
+
+        // Wait for all segment upload tasks to complete, returning an error if any task fails
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(e) => {
+                    return Err(WorkerError::Io(io::Error::new(io::ErrorKind::Other, e)));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -153,6 +269,8 @@ mod tests {
         Url::parse("https://example.com/dummy").unwrap()
     }
 
+    const SEGMENT_UPLOAD_CONCURRENCY: usize = 4;
+
     #[tokio::test]
     async fn process_returns_error_if_video_not_found() {
         let ulid = Ulid::new();
@@ -171,6 +289,7 @@ mod tests {
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(MockFileTransfer::new()),
             std::env::temp_dir(),
+            SEGMENT_UPLOAD_CONCURRENCY,
         );
 
         let result = processor.process(ulid).await;
@@ -197,6 +316,7 @@ mod tests {
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(MockFileTransfer::new()),
             std::env::temp_dir(),
+            SEGMENT_UPLOAD_CONCURRENCY,
         );
 
         let result = processor.process(ulid).await;
@@ -307,6 +427,7 @@ mod tests {
             Arc::new(transcoder),
             Arc::new(file_transfer),
             temp_root,
+            SEGMENT_UPLOAD_CONCURRENCY,
         );
 
         let result = processor.process(ulid).await;
@@ -365,6 +486,7 @@ mod tests {
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(file_transfer),
             tempfile::tempdir().unwrap().keep(),
+            SEGMENT_UPLOAD_CONCURRENCY,
         );
 
         let result = processor.process(ulid).await;

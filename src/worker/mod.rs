@@ -50,6 +50,9 @@ pub enum WorkerError {
 
     #[error("file transfer error: {0}")]
     Transfer(#[from] FileTransferError),
+
+    #[error("tokio semaphore acquire error: {0}")]
+    TokioAcquire(#[from] tokio::sync::AcquireError),
 }
 
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.

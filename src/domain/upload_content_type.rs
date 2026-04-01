@@ -8,7 +8,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 /// Strongly typed content type value for uploads.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(try_from = "String")]
 pub struct UploadContentType(Mime);
 
