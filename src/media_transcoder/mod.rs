@@ -49,6 +49,7 @@ impl Ffmpeg {
 
 #[async_trait::async_trait]
 impl MediaTranscoder for Ffmpeg {
+    #[tracing::instrument(skip(self))]
     async fn transmux(
         &self,
         input_path: &Path,
@@ -69,6 +70,8 @@ impl MediaTranscoder for Ffmpeg {
             .output()
             .await?;
 
+        tracing::info!(status = %output.status, "ffmpeg transmux exited");
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             return Err(TranscoderError::TransmuxFailed { stderr });
@@ -77,6 +80,7 @@ impl MediaTranscoder for Ffmpeg {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, progress_tx), fields(heartbeat_interval = ?heartbeat_interval))]
     async fn hls_transcode(
         &self,
         input_path: &Path,
@@ -122,7 +126,9 @@ impl MediaTranscoder for Ffmpeg {
         });
 
         let output = child.wait_with_output().await?;
-        drop(progress_handle);
+        progress_handle.abort(); // stop sending progress updates after process exits
+
+        tracing::info!(status = %output.status, "ffmpeg HLS transcode exited");
 
         if !output.status.success() {
             // Capture stderr

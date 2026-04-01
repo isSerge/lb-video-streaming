@@ -48,6 +48,7 @@ impl VideoProcessor {
     }
 
     /// Process a video by its ULID, performing necessary steps like transmuxing and transcoding.
+    #[tracing::instrument(skip(self))]
     pub async fn process(&self, ulid: Ulid) -> Result<(), WorkerError> {
         let record = self
             .repository
@@ -77,9 +78,8 @@ impl VideoProcessor {
     }
 
     /// Run the transmuxing step for a video, downloading the raw file, probing it, and performing transmuxing.
+    #[tracing::instrument(skip(self, record))]
     async fn run_transmux(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
-        tracing::info!(%ulid, "starting transmux");
-
         // Update status to "transmuxing" before starting the operation
         self.repository
             .update_status(ulid, VideoStatus::Transmuxing)
@@ -122,7 +122,7 @@ impl VideoProcessor {
             .create_transmux_upload_url(&transmux_key, &content_type)
             .await?;
 
-        tracing::info!(%ulid, url = %upload_url, "uploading transmuxed file");
+        tracing::info!(url = %upload_url, "uploading transmuxed file");
         self.file_transfer
             .upload(&output_path, upload_url, &content_type)
             .await?;
@@ -132,15 +132,12 @@ impl VideoProcessor {
             .set_transmux_key(ulid, &transmux_key)
             .await?;
 
-        tracing::info!(%ulid, "transmux phase completed");
-
         Ok(())
     }
 
     /// Run the HLS transcoding step for a video, which includes generating HLS segments and manifest, uploading them to storage, and updating the video record with the manifest key.
+    #[tracing::instrument(skip(self, record))]
     async fn run_hls_transcode(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
-        tracing::info!(%ulid, "starting HLS transcoding");
-
         // Update status to "transcoding" before starting the operation
         self.repository
             .update_status(ulid, VideoStatus::Transcoding)
@@ -169,6 +166,7 @@ impl VideoProcessor {
 
         // Define output directory for HLS segments and manifest within the temp directory
         let output_dir = temp_dir.path().join("hls");
+        tokio::fs::create_dir_all(&output_dir).await?;
 
         // Create watch channel and spawn task to update updated_at timestamp in the repository during transcoding.
         // TODO: Consider evolving this to a state-based progress update (e.g. watch<TranscodeStatus>)
@@ -179,10 +177,12 @@ impl VideoProcessor {
         let update_handle = tokio::spawn(async move {
             loop {
                 if progress_rx.changed().await.is_err() {
+                    tracing::debug!("transcode progress channel closed, ffmpeg finished");
                     break; // sender dropped, transcoding finished
                 }
+                tracing::info!("transcode heartbeat — ffmpeg still running");
                 if let Err(e) = repo.update_updated_at(ulid).await {
-                    tracing::error!(%ulid, error = %e, "failed to update updated_at");
+                    tracing::error!(error = %e, "failed to update updated_at");
                 }
             }
         });
@@ -209,7 +209,7 @@ impl VideoProcessor {
             .create_manifest_upload_url(&manifest_key, &upload_content_type)
             .await?;
 
-        tracing::info!(%ulid, url = %manifest_url, "uploading HLS manifest");
+        tracing::info!(url = %manifest_url, "uploading HLS manifest");
         self.file_transfer
             .upload(&manifest_path, manifest_url, &upload_content_type)
             .await?;
@@ -229,11 +229,9 @@ impl VideoProcessor {
             .update_status(ulid, VideoStatus::Ready)
             .await?;
 
-        tracing::info!(%ulid, "HLS transcode completed");
-
         // Clean up intermediate transmux file from storage
         if let Some(transmux_key) = &record.transmux_key {
-            tracing::info!(%ulid, "cleaning up intermediate transmux file from storage");
+            tracing::info!("cleaning up intermediate transmux file from storage");
             if let Err(e) = self.storage.delete_object(transmux_key).await {
                 tracing::warn!(error = %e, "failed to delete transmux file from R2, leaving stranded bytes");
             }
@@ -251,6 +249,7 @@ impl VideoProcessor {
     }
 
     /// Upload HLS segments in parallel
+    #[tracing::instrument(skip(self))]
     async fn upload_segments(&self, ulid: Ulid, output_dir: &Path) -> Result<(), WorkerError> {
         let ts_content_type = UploadContentType::from_str("video/MP2T")?;
         let mut segment_paths = Vec::new();
@@ -263,6 +262,8 @@ impl VideoProcessor {
                 segment_paths.push(path);
             }
         }
+
+        tracing::info!(count = segment_paths.len(), "uploading HLS segments");
 
         // Use a semaphore to limit concurrency of segment uploads and a JoinSet to manage the upload tasks
         let semaphore = Arc::new(Semaphore::new(self.config.segment_upload_concurrency));
@@ -279,6 +280,7 @@ impl VideoProcessor {
             // Spawn a task for each segment upload, acquiring a permit from the semaphore to limit concurrency
             join_set.spawn(async move {
                 let _permit = permit;
+                tracing::debug!(segment = %filename, "uploading HLS segment");
                 let segment_url = storage
                     .create_hls_segment_upload_url(&segment_key, &ts_content_type)
                     .await?;
