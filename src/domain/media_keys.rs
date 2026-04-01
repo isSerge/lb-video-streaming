@@ -75,3 +75,52 @@ impl Deref for HLSKey {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::ContainerFormat;
+    use std::str::FromStr;
+
+    fn test_ulid() -> Ulid {
+        Ulid::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap()
+    }
+
+    #[test]
+    fn transmux_key_generates_correct_path_for_mp4() {
+        let key = TransmuxKey::new(test_ulid(), ContainerFormat::Mp4);
+        assert_eq!(&*key, "transmux/01ARZ3NDEKTSV4RRFFQ69G5FAV/output.mp4");
+    }
+
+    #[test]
+    fn transmux_key_generates_correct_path_for_webm() {
+        let key = TransmuxKey::new(test_ulid(), ContainerFormat::Webm);
+        assert_eq!(&*key, "transmux/01ARZ3NDEKTSV4RRFFQ69G5FAV/output.webm");
+    }
+
+    #[test]
+    fn transmux_key_restores_from_persisted() {
+        let path = "transmux/custom/path.mp4".to_string();
+        let key = TransmuxKey::from_persisted(path.clone());
+        assert_eq!(&*key, path.as_str());
+    }
+
+    #[test]
+    fn manifest_key_generates_correct_path() {
+        let key = ManifestKey::new(test_ulid());
+        assert_eq!(&*key, "hls/01ARZ3NDEKTSV4RRFFQ69G5FAV/manifest.m3u8");
+    }
+
+    #[test]
+    fn manifest_key_restores_from_persisted() {
+        let path = "hls/custom/manifest.m3u8".to_string();
+        let key = ManifestKey::from_persisted(path.clone());
+        assert_eq!(&*key, path.as_str());
+    }
+
+    #[test]
+    fn hls_key_generates_correct_path() {
+        let key = HLSKey::new(test_ulid(), "segment_001.ts");
+        assert_eq!(&*key, "hls/01ARZ3NDEKTSV4RRFFQ69G5FAV/segment_001.ts");
+    }
+}
