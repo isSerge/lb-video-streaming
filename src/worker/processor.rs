@@ -247,7 +247,6 @@ impl VideoProcessor {
     /// Upload HLS segments in parallel
     #[tracing::instrument(skip(self))]
     async fn upload_segments(&self, ulid: Ulid, output_dir: &Path) -> Result<(), WorkerError> {
-        let ts_content_type = UploadContentType::from_str("video/MP2T")?;
         let mut segment_paths = Vec::new();
         let mut read_dir = tokio::fs::read_dir(output_dir).await?;
 
@@ -266,17 +265,19 @@ impl VideoProcessor {
         let mut join_set = JoinSet::new();
 
         for path in segment_paths {
-            let filename = path.file_name().unwrap().to_string_lossy().to_string();
+            let filename = path.file_name().unwrap().to_string_lossy().into_owned();
             let segment_key = HLSKey::new(ulid, &filename);
             let storage = self.storage.clone();
             let file_transfer = self.file_transfer.clone();
-            let ts_content_type = ts_content_type.clone();
+
+            // Acquire a permit from the semaphore before spawning the upload task
             let permit = semaphore.clone().acquire_owned().await?;
 
             // Spawn a task for each segment upload, acquiring a permit from the semaphore to limit concurrency
             join_set.spawn(async move {
                 let _permit = permit;
                 tracing::debug!(segment = %filename, "uploading HLS segment");
+                let ts_content_type = UploadContentType::from_str("video/MP2T")?;
                 let segment_url = storage
                     .create_hls_segment_upload_url(&segment_key, &ts_content_type)
                     .await?;
