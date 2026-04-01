@@ -53,30 +53,28 @@ impl VideoProcessor {
             .await?
             .ok_or(WorkerError::NotFound(ulid))?;
 
-        if record.transmux_required {
-            // Run transmuxing step
-            self.run_transmux(ulid, &record).await?;
-
-            // Re-fetch the record after transmuxing to get updated keys and status for the next steps
-            let record_updated = self
-                .repository
-                .find_video_by_ulid(ulid)
-                .await?
-                .ok_or(WorkerError::NotFound(ulid))?;
-
-            // Run HLS transcoding step
-            self.run_hls_transcode(ulid, &record_updated).await?;
+        // If the video requires transmuxing, run the transmux step first and get the TransmuxKey
+        let maybe_transmux_key = if record.transmux_required {
+            Some(self.run_transmux(ulid, &record).await?)
         } else {
-            // Skip directly to HLS transcoding
-            self.run_hls_transcode(ulid, &record).await?;
-        }
+            None
+        };
+
+        // Run HLS transcoding step, passing the TransmuxKey if available
+        self.run_hls_transcode(ulid, &record, maybe_transmux_key)
+            .await?;
 
         Ok(())
     }
 
     /// Run the transmuxing step for a video, downloading the raw file, probing it, and performing transmuxing.
+    /// Returns the new TransmuxKey if successful, which can be used for subsequent transcoding steps.
     #[tracing::instrument(skip(self, record))]
-    async fn run_transmux(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
+    async fn run_transmux(
+        &self,
+        ulid: Ulid,
+        record: &VideoRecord,
+    ) -> Result<TransmuxKey, WorkerError> {
         // Update status to "transmuxing" before starting the operation
         self.repository
             .update_status(ulid, VideoStatus::Transmuxing)
@@ -129,12 +127,17 @@ impl VideoProcessor {
             .set_transmux_key(ulid, &transmux_key)
             .await?;
 
-        Ok(())
+        Ok(transmux_key)
     }
 
     /// Run the HLS transcoding step for a video, which includes generating HLS segments and manifest, uploading them to storage, and updating the video record with the manifest key.
     #[tracing::instrument(skip(self, record))]
-    async fn run_hls_transcode(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
+    async fn run_hls_transcode(
+        &self,
+        ulid: Ulid,
+        record: &VideoRecord,
+        transmux_key: Option<TransmuxKey>,
+    ) -> Result<(), WorkerError> {
         // Update status to "transcoding" before starting the operation
         self.repository
             .update_status(ulid, VideoStatus::Transcoding)
@@ -146,7 +149,7 @@ impl VideoProcessor {
             .tempdir_in(&self.config.temp_dir)?;
 
         // Download the source file (either raw or transmuxed) to the temp directory for processing
-        let download_url = match &record.transmux_key {
+        let download_url = match &transmux_key {
             Some(transmux_key) => {
                 self.storage
                     .create_transmux_download_url(transmux_key)
@@ -648,7 +651,9 @@ mod tests {
             dummy_worker_config(),
         );
 
-        let result = processor.run_hls_transcode(ulid, &record).await;
+        let result = processor
+            .run_hls_transcode(ulid, &record, Some(transmux_key))
+            .await;
         assert!(
             result.is_ok(),
             "expected run_hls_transcode to succeed but got error: {:?}",
@@ -704,7 +709,7 @@ mod tests {
         );
 
         let record = mock_video_record(ulid, false);
-        let result = processor.run_hls_transcode(ulid, &record).await;
+        let result = processor.run_hls_transcode(ulid, &record, None).await;
 
         assert!(matches!(
             result,
