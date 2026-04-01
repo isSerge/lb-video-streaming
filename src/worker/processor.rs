@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
 use tokio::{
@@ -31,6 +32,7 @@ pub struct VideoProcessor {
     file_transfer: Arc<dyn FileTransfer>,
     temp_root: PathBuf,
     segment_upload_concurrency: usize,
+    heartbeat_interval: Duration,
 }
 
 impl VideoProcessor {
@@ -42,6 +44,7 @@ impl VideoProcessor {
         file_transfer: Arc<dyn FileTransfer>,
         temp_root: PathBuf,
         segment_upload_concurrency: usize,
+        heartbeat_interval: Duration,
     ) -> Self {
         Self {
             file_transfer,
@@ -51,6 +54,7 @@ impl VideoProcessor {
             transcoder,
             temp_root,
             segment_upload_concurrency,
+            heartbeat_interval,
         }
     }
 
@@ -197,7 +201,12 @@ impl VideoProcessor {
         // Run the HLS transcoding process, which generates segments and a manifest file
         let manifest_path = self
             .transcoder
-            .hls_transcode(&input_path, &output_dir, progress_tx)
+            .hls_transcode(
+                &input_path,
+                &output_dir,
+                progress_tx,
+                self.heartbeat_interval,
+            )
             .await?;
 
         // Wait for the update task to finish
@@ -340,6 +349,7 @@ mod tests {
     }
 
     const SEGMENT_UPLOAD_CONCURRENCY: usize = 4;
+    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
     #[tokio::test]
     async fn process_returns_error_if_video_not_found() {
@@ -360,6 +370,7 @@ mod tests {
             Arc::new(MockFileTransfer::new()),
             std::env::temp_dir(),
             SEGMENT_UPLOAD_CONCURRENCY,
+            HEARTBEAT_INTERVAL,
         );
 
         let result = processor.process(ulid).await;
@@ -463,6 +474,7 @@ mod tests {
             Arc::new(file_transfer),
             temp_dir.path().to_path_buf(),
             SEGMENT_UPLOAD_CONCURRENCY,
+            HEARTBEAT_INTERVAL,
         );
 
         let result = processor.run_transmux(ulid, &record).await;
@@ -526,6 +538,7 @@ mod tests {
             Arc::new(file_transfer),
             tempfile::tempdir().unwrap().keep(),
             SEGMENT_UPLOAD_CONCURRENCY,
+            HEARTBEAT_INTERVAL,
         );
 
         let result = processor.process(ulid).await;
@@ -629,12 +642,15 @@ mod tests {
         transcoder
             .expect_hls_transcode()
             .withf(
-                |in_path: &Path, out_dir: &Path, _: &tokio::sync::watch::Sender<()>| {
+                |in_path: &Path,
+                 out_dir: &Path,
+                 _: &tokio::sync::watch::Sender<()>,
+                 _: &Duration| {
                     in_path.ends_with("input") && out_dir.ends_with("hls")
                 },
             )
             .once()
-            .returning(|_, out_dir, _| {
+            .returning(|_, out_dir, _, _| {
                 let manifest = out_dir.join("manifest.m3u8");
                 std::fs::create_dir_all(out_dir).unwrap();
                 std::fs::write(&manifest, "dummy manifest").unwrap();
@@ -649,6 +665,7 @@ mod tests {
             Arc::new(file_transfer),
             temp_dir.path().to_path_buf(),
             SEGMENT_UPLOAD_CONCURRENCY,
+            HEARTBEAT_INTERVAL,
         );
 
         let result = processor.run_hls_transcode(ulid, &record).await;

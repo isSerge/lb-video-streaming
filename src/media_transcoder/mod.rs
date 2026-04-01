@@ -82,6 +82,7 @@ impl MediaTranscoder for Ffmpeg {
         input_path: &Path,
         output_dir: &Path,
         progress_tx: tokio::sync::watch::Sender<()>,
+        heartbeat_interval: Duration,
     ) -> Result<PathBuf, TranscoderError> {
         let manifest_path = output_dir.join("manifest.m3u8");
 
@@ -113,7 +114,7 @@ impl MediaTranscoder for Ffmpeg {
         // Spawn a task to periodically send progress updates until the transcoding process completes
         let progress_handle = tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(30)).await; // replace with configurable interval
+                tokio::time::sleep(heartbeat_interval).await;
                 if progress_tx.send(()).is_err() {
                     break; // receiver dropped
                 }

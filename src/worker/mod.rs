@@ -1,7 +1,7 @@
 mod processor;
 
 pub use processor::VideoProcessor;
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc};
 use ulid::Ulid;
@@ -101,23 +101,23 @@ impl Worker {
     /// NOTE: This runs in the same worker process for simplicity, but could be broken out into separate tasks or even a separate service if necessary.
     pub async fn run_cleanup(
         repository: Arc<dyn VideoRepository>,
-        timeout_secs: NonZeroU64,
-        sweep_interval_secs: NonZeroU64,
-        pending_upload_ttl_secs: NonZeroU64,
+        timeout: Duration,
+        sweep_interval: Duration,
+        pending_upload_ttl: Duration,
     ) {
         tracing::info!(
-            timeout_secs,
-            sweep_interval_secs,
-            pending_upload_ttl_secs,
+            ?timeout,
+            ?sweep_interval,
+            ?pending_upload_ttl,
             "cleanup task started"
         );
-        let mut interval = tokio::time::interval(Duration::from_secs(sweep_interval_secs.get()));
+        let mut interval = tokio::time::interval(sweep_interval);
 
         loop {
             interval.tick().await;
 
             // 1. Mark stuck processing jobs as failed
-            match repository.mark_zombie_jobs_failed(timeout_secs).await {
+            match repository.mark_zombie_jobs_failed(timeout).await {
                 Ok(count) if count > 0 => {
                     tracing::warn!(count, "swept zombie jobs to failed status")
                 }
@@ -126,8 +126,10 @@ impl Worker {
             }
 
             // 2. Delete stale pending_upload rows
-            let pending_ttl = Duration::from_secs(pending_upload_ttl_secs.get());
-            match repository.delete_stale_pending_uploads(pending_ttl).await {
+            match repository
+                .delete_stale_pending_uploads(pending_upload_ttl)
+                .await
+            {
                 Ok(count) if count > 0 => {
                     tracing::info!(count, "deleted stale pending_upload rows")
                 }

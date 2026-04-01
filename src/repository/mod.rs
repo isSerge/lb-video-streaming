@@ -1,6 +1,6 @@
 pub mod port;
 
-use std::{num::NonZeroU64, time::Duration};
+use std::time::Duration;
 
 pub use port::VideoRepository;
 
@@ -127,9 +127,8 @@ impl VideoRepository for PgVideoRepository {
         Ok(rows.into_iter().map(|r| r.ulid.parse().unwrap()).collect())
     }
 
-    async fn mark_zombie_jobs_failed(&self, timeout: NonZeroU64) -> Result<u64, sqlx::Error> {
-        // Safe cast: 2 hours is 7,200 seconds, well within i32 limits.
-        let timeout_secs = timeout.get() as i32;
+    async fn mark_zombie_jobs_failed(&self, timeout: Duration) -> Result<u64, sqlx::Error> {
+        let timeout_secs = timeout.as_secs() as i32;
 
         let result = sqlx::query!(
             "UPDATE videos SET status = 'failed' 
@@ -452,7 +451,7 @@ mod tests {
     #[sqlx::test(migrations = "./migrations")]
     async fn mark_zombie_jobs_failed_updates_only_old_processing_jobs(pool: PgPool) {
         let repository = PgVideoRepository::with_pool(pool.clone());
-        let timeout = NonZeroU64::new(7200).unwrap(); // 2 hours
+        let timeout = Duration::from_secs(7200); // 2 hours
 
         let z_transcoding = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD1"); // Zombie transcoding
         let z_transmuxing = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD2"); // Zombie transmuxing
@@ -654,7 +653,7 @@ mod tests {
     #[sqlx::test(migrations = "./migrations")]
     async fn mark_zombie_jobs_failed_returns_zero_when_no_jobs_exist(pool: PgPool) {
         let repository = PgVideoRepository::with_pool(pool);
-        let timeout = NonZeroU64::new(7200).unwrap();
+        let timeout = Duration::from_secs(7200);
 
         let affected = repository.mark_zombie_jobs_failed(timeout).await.unwrap();
         assert_eq!(affected, 0);
@@ -663,7 +662,7 @@ mod tests {
     #[sqlx::test(migrations = "./migrations")]
     async fn mark_zombie_jobs_failed_ignores_old_jobs_in_terminal_states(pool: PgPool) {
         let repository = PgVideoRepository::with_pool(pool.clone());
-        let timeout = NonZeroU64::new(7200).unwrap();
+        let timeout = Duration::from_secs(7200);
 
         let u_ready = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD1");
         let u_failed = ulid("01ARZ3NDEKTSV4RRFFQ69G5FD2");

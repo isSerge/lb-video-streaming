@@ -70,6 +70,9 @@ pub struct Config {
 
     #[serde(default = "defaults::segment_upload_concurrency")]
     pub segment_upload_concurrency: usize,
+
+    #[serde(default = "defaults::transcode_heartbeat_interval_secs")]
+    pub transcode_heartbeat_interval_secs: NonZeroU64,
 }
 
 impl Config {
@@ -206,6 +209,10 @@ mod defaults {
 
     pub fn segment_upload_concurrency() -> usize {
         5
+    }
+
+    pub fn transcode_heartbeat_interval_secs() -> NonZeroU64 {
+        NonZeroU64::new(30).expect("default transcode_heartbeat_interval_secs must be non-zero")
     }
 }
 

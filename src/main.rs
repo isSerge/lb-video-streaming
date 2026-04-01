@@ -12,7 +12,7 @@ use config::Config;
 use media_probe::{Ffprobe, MediaProbe};
 use media_transcoder::MediaTranscoder;
 use repository::{PgVideoRepository, VideoRepository};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use storage::{R2Storage, Storage};
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
@@ -80,6 +80,7 @@ async fn main() -> Result<(), AppError> {
         Arc::clone(&file_transfer),
         temp_root,
         config.segment_upload_concurrency,
+        Duration::from_secs(config.transcode_heartbeat_interval_secs.get()),
     );
     let mut worker = Worker::new(worker_rx, processor, config.max_concurrent_transcodes.get());
     let worker_video_repo_clone = Arc::clone(&video_repository);
@@ -88,9 +89,9 @@ async fn main() -> Result<(), AppError> {
     let _cleanup_handle = tokio::spawn(async move {
         Worker::run_cleanup(
             worker_video_repo_clone,
-            config.zombie_timeout_secs,
-            config.zombie_sweep_interval_secs,
-            config.pending_upload_ttl_secs,
+            Duration::from_secs(config.zombie_timeout_secs.get()),
+            Duration::from_secs(config.zombie_sweep_interval_secs.get()),
+            Duration::from_secs(config.pending_upload_ttl_secs.get()),
         )
         .await
     });
