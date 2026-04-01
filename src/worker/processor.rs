@@ -127,12 +127,9 @@ impl VideoProcessor {
             .upload(&output_path, upload_url, &content_type)
             .await?;
 
-        // Set the new transmux key and update status to "transcoding" after successful upload
+        // Set the new transmux key
         self.repository
             .set_transmux_key(ulid, &transmux_key)
-            .await?;
-        self.repository
-            .update_status(ulid, VideoStatus::Transcoding)
             .await?;
 
         tracing::info!(%ulid, "transmux phase completed, starting transcoding");
@@ -144,7 +141,10 @@ impl VideoProcessor {
     async fn run_hls_transcode(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
         tracing::info!(%ulid, "starting HLS transcoding");
 
-        // TODO: think about whether we want to update status to "transcoding" here
+        // Update status to "transcoding" before starting the operation
+        self.repository
+            .update_status(ulid, VideoStatus::Transcoding)
+            .await?;
 
         // Create a temp directory
         let temp_dir = tempfile::tempdir_in(&self.temp_root)?;
@@ -325,10 +325,16 @@ mod tests {
     #[tokio::test]
     async fn process_skips_transmux_when_not_required_and_does_transcode() {
         let ulid = Ulid::new();
-        let temp_root = tempfile::tempdir().unwrap().keep();
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut repo = MockVideoRepository::new();
         let manifest_key = ManifestKey::from(ulid.to_string());
         let manifest_key_clone = manifest_key.clone();
+
+        // Expect status update to "transcoding" before starting transcoding
+        repo.expect_update_status()
+            .with(eq(ulid), eq(VideoStatus::Transcoding))
+            .once()
+            .returning(|_, _| Ok(()));
 
         // Return a record where transmux_required = false
         repo.expect_find_video_by_ulid()
@@ -415,7 +421,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            temp_root,
+            temp_dir.path().to_path_buf(),
             SEGMENT_UPLOAD_CONCURRENCY,
         );
 
@@ -430,21 +436,16 @@ mod tests {
     #[tokio::test]
     async fn run_transmux_orchestrates_full_pipeline_successfully() {
         let ulid = Ulid::new();
-        let temp_root = tempfile::tempdir().unwrap().keep();
+        let temp_dir = tempfile::tempdir().unwrap();
 
         let mut repo = MockVideoRepository::new();
 
         // Return a record where transmux_required = true
         let record = mock_video_record(ulid, true);
 
-        // Expect status updates to "transmuxing" and then "transcoding"
+        // Expect status update to "transmuxing"
         repo.expect_update_status()
             .with(eq(ulid), eq(VideoStatus::Transmuxing))
-            .once()
-            .returning(|_, _| Ok(()));
-
-        repo.expect_update_status()
-            .with(eq(ulid), eq(VideoStatus::Transcoding))
             .once()
             .returning(|_, _| Ok(()));
 
@@ -527,7 +528,7 @@ mod tests {
             Arc::new(probe),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            temp_root,
+            temp_dir.path().to_path_buf(),
             SEGMENT_UPLOAD_CONCURRENCY,
         );
 
@@ -601,12 +602,18 @@ mod tests {
     #[tokio::test]
     async fn run_hls_transcode_orchestrates_successfully() {
         let ulid = Ulid::new();
-        let temp_root = tempfile::tempdir().unwrap().keep();
+        let temp_dir = tempfile::tempdir().unwrap();
         let manifest_key = ManifestKey::from(ulid.to_string());
         let manifest_key_clone = manifest_key.clone();
 
         let mut repo = MockVideoRepository::new();
         let record = mock_video_record(ulid, false);
+
+        // Expect status update to "transcoding" before starting
+        repo.expect_update_status()
+            .with(eq(ulid), eq(VideoStatus::Transcoding))
+            .once()
+            .returning(|_, _| Ok(()));
 
         // Expect update updated_at to be called during transcoding
         repo.expect_update_updated_at()
@@ -687,7 +694,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            temp_root,
+            temp_dir.path().to_path_buf(),
             SEGMENT_UPLOAD_CONCURRENCY,
         );
 
