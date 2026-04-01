@@ -306,7 +306,7 @@ mod tests {
         domain::{AudioCodec, ContainerFormat, MediaMetadata, RawUploadKey, VideoCodec},
         file_transfer::port::MockFileTransfer,
         media_probe::port::MockMediaProbe,
-        media_transcoder::port::MockMediaTranscoder,
+        media_transcoder::{TranscoderError, port::MockMediaTranscoder},
         repository::port::MockVideoRepository,
         storage::port::MockStorage,
     };
@@ -654,5 +654,63 @@ mod tests {
             "expected run_hls_transcode to succeed but got error: {:?}",
             result.err()
         );
+    }
+
+    #[tokio::test]
+    async fn run_hls_transcode_bubbles_error_on_ffmpeg_failure() {
+        let ulid = Ulid::new();
+        let _temp_dir = tempfile::tempdir().unwrap();
+        let mut repo = MockVideoRepository::new();
+
+        // It should still mark as transcoding and update updated_at initially
+        repo.expect_update_status()
+            .with(eq(ulid), eq(VideoStatus::Transcoding))
+            .once()
+            .returning(|_, _| Ok(()));
+
+        // The keep-alive ticker should call update_updated_at at least once during transcoding
+        repo.expect_update_updated_at().returning(|_| Ok(()));
+
+        let mut storage = MockStorage::new();
+        storage
+            .expect_create_download_url()
+            .once()
+            .returning(|_| Ok(dummy_url()));
+
+        let mut file_transfer = MockFileTransfer::new();
+        file_transfer
+            .expect_download()
+            .once()
+            .returning(|_, _| Ok(()));
+
+        let mut transcoder = MockMediaTranscoder::new();
+
+        // Simulate an FFmpeg failure during HLS transcoding by returning an error from the mock transcoder.
+        transcoder.expect_hls_transcode().once().returning(|_, _| {
+            Err(TranscoderError::TranscodeFailed {
+                stderr: "boom".into(),
+            })
+        });
+
+        // The pipeline MUST halt here. Storage upload and DB finalize should NOT be called.
+
+        let processor = VideoProcessor::new(
+            Arc::new(repo),
+            Arc::new(storage),
+            Arc::new(MockMediaProbe::new()),
+            Arc::new(transcoder),
+            Arc::new(file_transfer),
+            dummy_worker_config(),
+        );
+
+        let record = mock_video_record(ulid, false);
+        let result = processor.run_hls_transcode(ulid, &record).await;
+
+        assert!(matches!(
+            result,
+            Err(WorkerError::Transcoder(
+                TranscoderError::TranscodeFailed { .. }
+            ))
+        ));
     }
 }
