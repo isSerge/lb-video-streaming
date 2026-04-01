@@ -53,6 +53,9 @@ pub enum WorkerError {
 
     #[error("tokio semaphore acquire error: {0}")]
     TokioAcquire(#[from] tokio::sync::AcquireError),
+
+    #[error("tokio task join error: {0}")]
+    TokioJoin(#[from] tokio::task::JoinError),
 }
 
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.

@@ -5,7 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use tokio::{sync::Semaphore, task::JoinSet};
+use tokio::{
+    sync::{Semaphore, watch},
+    task::JoinSet,
+};
 use ulid::Ulid;
 
 use super::WorkerError;
@@ -80,7 +83,7 @@ impl VideoProcessor {
         Ok(())
     }
 
-    /// Run the transmuxing step for a video, downloading the raw file, probing it, and performing transmuxing if needed.
+    /// Run the transmuxing step for a video, downloading the raw file, probing it, and performing transmuxing.
     async fn run_transmux(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
         tracing::info!(%ulid, "starting transmux");
 
@@ -89,16 +92,20 @@ impl VideoProcessor {
             .update_status(ulid, VideoStatus::Transmuxing)
             .await?;
 
-        let temp_dir = tempfile::tempdir_in(&self.temp_root)?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix(&format!("transmux-{}", ulid))
+            .tempdir_in(&self.temp_root)?;
         let raw_path = temp_dir.path().join("input");
 
         // Download raw file from storage to local temp path for processing
         let raw_url = self.storage.create_download_url(&record.raw_key).await?;
+
         tracing::info!(url = %raw_url, "downloading raw file for transmuxing");
         self.file_transfer.download(raw_url, &raw_path).await?;
 
         // Probe media info to determine target container format
         let metadata = self.media_probe.probe_file(&raw_path).await?;
+
         let target_container = metadata
             .transmux_target_container()
             .ok_or(WorkerError::NoTargetContainer)?;
@@ -132,7 +139,7 @@ impl VideoProcessor {
             .set_transmux_key(ulid, &transmux_key)
             .await?;
 
-        tracing::info!(%ulid, "transmux phase completed, starting transcoding");
+        tracing::info!(%ulid, "transmux phase completed");
 
         Ok(())
     }
@@ -147,7 +154,9 @@ impl VideoProcessor {
             .await?;
 
         // Create a temp directory
-        let temp_dir = tempfile::tempdir_in(&self.temp_root)?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix(&format!("hls-{}", ulid))
+            .tempdir_in(&self.temp_root)?;
 
         // Download the source file (either raw or transmuxed) to the temp directory for processing
         let download_url = match &record.transmux_key {
@@ -158,6 +167,7 @@ impl VideoProcessor {
             }
             None => self.storage.create_download_url(&record.raw_key).await,
         }?;
+
         let input_path = temp_dir.path().join("input");
         tracing::info!(url = %download_url, "downloading file for HLS transcoding");
         self.file_transfer
@@ -167,13 +177,31 @@ impl VideoProcessor {
         // Define output directory for HLS segments and manifest within the temp directory
         let output_dir = temp_dir.path().join("hls");
 
-        // TODO: create watch channel and spawn task to update
+        // Create watch channel and spawn task to update updated_at timestamp in the repository during transcoding.
+        // TODO: Consider evolving this to a state-based progress update (e.g. watch<TranscodeStatus>)
+        // to allow reporting real-time progress (percentage, frame count) from the transcoder.
+        let (progress_tx, mut progress_rx) = watch::channel(());
+
+        let repo = self.repository.clone();
+        let update_handle = tokio::spawn(async move {
+            loop {
+                if progress_rx.changed().await.is_err() {
+                    break; // sender dropped, transcoding finished
+                }
+                if let Err(e) = repo.update_updated_at(ulid).await {
+                    tracing::error!(%ulid, error = %e, "failed to update updated_at");
+                }
+            }
+        });
 
         // Run the HLS transcoding process, which generates segments and a manifest file
         let manifest_path = self
             .transcoder
-            .hls_transcode(&input_path, &output_dir)
+            .hls_transcode(&input_path, &output_dir, progress_tx)
             .await?;
+
+        // Wait for the update task to finish
+        update_handle.await?;
 
         // Upload manifest
         let manifest_key = ManifestKey::from(ulid.to_string());
@@ -182,6 +210,7 @@ impl VideoProcessor {
             .storage
             .create_manifest_upload_url(&manifest_key, &upload_content_type)
             .await?;
+
         tracing::info!(%ulid, url = %manifest_url, "uploading HLS manifest");
         self.file_transfer
             .upload(&manifest_path, manifest_url, &upload_content_type)
@@ -197,6 +226,7 @@ impl VideoProcessor {
         self.repository
             .set_manifest_key(ulid, &manifest_key)
             .await?;
+
         self.repository
             .update_status(ulid, VideoStatus::Ready)
             .await?;
@@ -216,6 +246,8 @@ impl VideoProcessor {
                 // We don't return an error because the HLS phase already succeeded.
             }
         }
+
+        // TODO: Consider a policy for cleaning up the raw file after successful HLS transcoding.
 
         Ok(())
     }
@@ -596,11 +628,13 @@ mod tests {
         // HLS transcode should be called
         transcoder
             .expect_hls_transcode()
-            .withf(|in_path: &Path, out_dir: &Path| {
-                in_path.ends_with("input") && out_dir.ends_with("hls")
-            })
+            .withf(
+                |in_path: &Path, out_dir: &Path, _: &tokio::sync::watch::Sender<()>| {
+                    in_path.ends_with("input") && out_dir.ends_with("hls")
+                },
+            )
             .once()
-            .returning(|_, out_dir| {
+            .returning(|_, out_dir, _| {
                 let manifest = out_dir.join("manifest.m3u8");
                 std::fs::create_dir_all(out_dir).unwrap();
                 std::fs::write(&manifest, "dummy manifest").unwrap();

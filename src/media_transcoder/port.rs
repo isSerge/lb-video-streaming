@@ -20,6 +20,6 @@ pub trait MediaTranscoder: Send + Sync {
         &self,
         input_path: &Path,
         output_dir: &Path,
-        // progress_tx: Option<tokio::sync::watch::Sender<()>>, // TODO: add progress reporting channel for worker to update job status in real time
+        progress_tx: tokio::sync::watch::Sender<()>,
     ) -> Result<PathBuf, TranscoderError>;
 }

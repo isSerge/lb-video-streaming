@@ -4,6 +4,7 @@ pub use port::MediaTranscoder;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
+    time::Duration,
 };
 use thiserror::Error;
 use tokio::process::Command;
@@ -80,7 +81,7 @@ impl MediaTranscoder for Ffmpeg {
         &self,
         input_path: &Path,
         output_dir: &Path,
-        // progress_tx: Option<tokio::sync::watch::Sender<()>>,
+        progress_tx: tokio::sync::watch::Sender<()>,
     ) -> Result<PathBuf, TranscoderError> {
         let manifest_path = output_dir.join("manifest.m3u8");
 
@@ -109,9 +110,18 @@ impl MediaTranscoder for Ffmpeg {
 
         let child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
 
-        // TODO: implement sending to channel for progress updates by parsing ffmpeg stdout/stderr
+        // Spawn a task to periodically send progress updates until the transcoding process completes
+        let progress_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await; // replace with configurable interval
+                if progress_tx.send(()).is_err() {
+                    break; // receiver dropped
+                }
+            }
+        });
 
         let output = child.wait_with_output().await?;
+        drop(progress_handle);
 
         if !output.status.success() {
             // Capture stderr
