@@ -1,10 +1,4 @@
-use std::{
-    io,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{io, path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{Semaphore, watch},
@@ -14,6 +8,7 @@ use ulid::Ulid;
 
 use super::WorkerError;
 use crate::{
+    config::WorkerConfig,
     domain::{HLSKey, ManifestKey, TransmuxKey, UploadContentType, VideoStatus},
     file_transfer::FileTransfer,
     media_probe::MediaProbe,
@@ -30,9 +25,7 @@ pub struct VideoProcessor {
     media_probe: Arc<dyn MediaProbe>,
     transcoder: Arc<dyn MediaTranscoder>,
     file_transfer: Arc<dyn FileTransfer>,
-    temp_root: PathBuf,
-    segment_upload_concurrency: usize,
-    heartbeat_interval: Duration,
+    config: WorkerConfig,
 }
 
 impl VideoProcessor {
@@ -42,9 +35,7 @@ impl VideoProcessor {
         media_probe: Arc<dyn MediaProbe>,
         transcoder: Arc<dyn MediaTranscoder>,
         file_transfer: Arc<dyn FileTransfer>,
-        temp_root: PathBuf,
-        segment_upload_concurrency: usize,
-        heartbeat_interval: Duration,
+        config: WorkerConfig,
     ) -> Self {
         Self {
             file_transfer,
@@ -52,9 +43,7 @@ impl VideoProcessor {
             storage,
             media_probe,
             transcoder,
-            temp_root,
-            segment_upload_concurrency,
-            heartbeat_interval,
+            config,
         }
     }
 
@@ -98,7 +87,7 @@ impl VideoProcessor {
 
         let temp_dir = tempfile::Builder::new()
             .prefix(&format!("transmux-{}", ulid))
-            .tempdir_in(&self.temp_root)?;
+            .tempdir_in(&self.config.temp_dir)?;
         let raw_path = temp_dir.path().join("input");
 
         // Download raw file from storage to local temp path for processing
@@ -160,7 +149,7 @@ impl VideoProcessor {
         // Create a temp directory
         let temp_dir = tempfile::Builder::new()
             .prefix(&format!("hls-{}", ulid))
-            .tempdir_in(&self.temp_root)?;
+            .tempdir_in(&self.config.temp_dir)?;
 
         // Download the source file (either raw or transmuxed) to the temp directory for processing
         let download_url = match &record.transmux_key {
@@ -205,7 +194,7 @@ impl VideoProcessor {
                 &input_path,
                 &output_dir,
                 progress_tx,
-                self.heartbeat_interval,
+                Duration::from_secs(self.config.transcode_heartbeat_interval_secs),
             )
             .await?;
 
@@ -276,7 +265,7 @@ impl VideoProcessor {
         }
 
         // Use a semaphore to limit concurrency of segment uploads and a JoinSet to manage the upload tasks
-        let semaphore = Arc::new(Semaphore::new(self.segment_upload_concurrency));
+        let semaphore = Arc::new(Semaphore::new(self.config.segment_upload_concurrency));
         let mut join_set = JoinSet::new();
 
         for path in segment_paths {
@@ -348,8 +337,17 @@ mod tests {
         Url::parse("https://example.com/dummy").unwrap()
     }
 
-    const SEGMENT_UPLOAD_CONCURRENCY: usize = 4;
-    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+    fn dummy_worker_config() -> WorkerConfig {
+        WorkerConfig {
+            max_concurrent_transcodes: 1.try_into().unwrap(),
+            temp_dir: std::env::temp_dir(),
+            segment_upload_concurrency: 4,
+            transcode_heartbeat_interval_secs: 30.try_into().unwrap(),
+            zombie_timeout_secs: 7200.try_into().unwrap(),
+            zombie_sweep_interval_secs: 3600.try_into().unwrap(),
+            worker_channel_buffer_size: 100,
+        }
+    }
 
     #[tokio::test]
     async fn process_returns_error_if_video_not_found() {
@@ -368,9 +366,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(MockFileTransfer::new()),
-            std::env::temp_dir(),
-            SEGMENT_UPLOAD_CONCURRENCY,
-            HEARTBEAT_INTERVAL,
+            dummy_worker_config(),
         );
 
         let result = processor.process(ulid).await;
@@ -380,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn run_transmux_orchestrates_full_pipeline_successfully() {
         let ulid = Ulid::new();
-        let temp_dir = tempfile::tempdir().unwrap();
+        let _temp_dir = tempfile::tempdir().unwrap();
 
         let mut repo = MockVideoRepository::new();
 
@@ -472,9 +468,7 @@ mod tests {
             Arc::new(probe),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            temp_dir.path().to_path_buf(),
-            SEGMENT_UPLOAD_CONCURRENCY,
-            HEARTBEAT_INTERVAL,
+            dummy_worker_config(),
         );
 
         let result = processor.run_transmux(ulid, &record).await;
@@ -536,9 +530,7 @@ mod tests {
             Arc::new(probe),
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(file_transfer),
-            tempfile::tempdir().unwrap().keep(),
-            SEGMENT_UPLOAD_CONCURRENCY,
-            HEARTBEAT_INTERVAL,
+            dummy_worker_config(),
         );
 
         let result = processor.process(ulid).await;
@@ -548,7 +540,7 @@ mod tests {
     #[tokio::test]
     async fn run_hls_transcode_orchestrates_successfully() {
         let ulid = Ulid::new();
-        let temp_dir = tempfile::tempdir().unwrap();
+        let _temp_dir = tempfile::tempdir().unwrap();
         let manifest_key = ManifestKey::from(ulid.to_string());
         let manifest_key_clone = manifest_key.clone();
 
@@ -663,9 +655,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            temp_dir.path().to_path_buf(),
-            SEGMENT_UPLOAD_CONCURRENCY,
-            HEARTBEAT_INTERVAL,
+            dummy_worker_config(),
         );
 
         let result = processor.run_hls_transcode(ulid, &record).await;

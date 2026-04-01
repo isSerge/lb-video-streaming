@@ -20,7 +20,7 @@ pub use state::AppState;
 
 /// Build the top-level API router.
 pub fn router(state: AppState) -> Router {
-    let ui_origin = HeaderValue::from_str(&state.config.ui_origin)
+    let ui_origin = HeaderValue::from_str(&state.config.server.ui_origin)
         .expect("UI_ORIGIN must be a valid HTTP header value");
 
     let cors = CorsLayer::new()

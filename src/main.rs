@@ -12,7 +12,7 @@ use config::Config;
 use media_probe::{Ffprobe, MediaProbe};
 use media_transcoder::MediaTranscoder;
 use repository::{PgVideoRepository, VideoRepository};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use storage::{R2Storage, Storage};
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
@@ -38,13 +38,13 @@ async fn main() -> Result<(), AppError> {
     let config = Config::from_env()?;
 
     // Ensure the worker temp directory exists before starting the application
-    let temp_root = PathBuf::from(&config.worker_temp_dir);
+    let temp_root = config.worker.temp_dir.clone();
     std::fs::create_dir_all(&temp_root).map_err(AppError::Io)?;
 
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(config.log_level.as_str()))
+                .or_else(|_| EnvFilter::try_new(config.server.log_level.as_str()))
                 .unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
@@ -57,7 +57,7 @@ async fn main() -> Result<(), AppError> {
     let r2_storage = R2Storage::new(&config);
     tracing::info!(bucket = %config.r2_bucket_name, "R2 storage client ready");
 
-    let bind_addr = format!("{}:{}", config.server_host, config.server_port.get());
+    let bind_addr = format!("{}:{}", config.server.host, config.server.port);
 
     // Initialize shared services and state for API handlers and worker tasks.
     let video_repository: Arc<dyn VideoRepository> = Arc::new(video_repository);
@@ -68,7 +68,8 @@ async fn main() -> Result<(), AppError> {
     let file_transfer: Arc<dyn FileTransfer> = Arc::new(HttpFileTransfer::new(http_client));
 
     // Create a channel for communicating upload completion events to the worker.
-    let (worker_tx, worker_rx) = tokio::sync::mpsc::channel(config.worker_channel_buffer_size);
+    let (worker_tx, worker_rx) =
+        tokio::sync::mpsc::channel(config.worker.worker_channel_buffer_size);
 
     // Spawn worker tasks for processing uploads and sweeping zombies.
 
@@ -78,20 +79,22 @@ async fn main() -> Result<(), AppError> {
         Arc::clone(&media_probe),
         Arc::clone(&media_transcoder),
         Arc::clone(&file_transfer),
-        temp_root,
-        config.segment_upload_concurrency,
-        Duration::from_secs(config.transcode_heartbeat_interval_secs.get()),
+        config.worker.clone(),
     );
-    let mut worker = Worker::new(worker_rx, processor, config.max_concurrent_transcodes.get());
+    let mut worker = Worker::new(
+        worker_rx,
+        processor,
+        config.worker.max_concurrent_transcodes,
+    );
     let worker_video_repo_clone = Arc::clone(&video_repository);
     // TODO: use handlers during graceful shutdown to ensure all tasks are properly stopped and no jobs are lost
     let _worker_handle = tokio::spawn(async move { worker.run_worker_loop().await });
     let _cleanup_handle = tokio::spawn(async move {
         Worker::run_cleanup(
             worker_video_repo_clone,
-            Duration::from_secs(config.zombie_timeout_secs.get()),
-            Duration::from_secs(config.zombie_sweep_interval_secs.get()),
-            Duration::from_secs(config.pending_upload_ttl_secs.get()),
+            Duration::from_secs(config.worker.zombie_timeout_secs),
+            Duration::from_secs(config.worker.zombie_sweep_interval_secs),
+            Duration::from_secs(config.storage.pending_upload_ttl_secs),
         )
         .await
     });

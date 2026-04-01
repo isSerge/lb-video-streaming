@@ -17,8 +17,10 @@ use crate::{
 pub struct R2Storage {
     client: Client,
     bucket_name: String,
-    /// TTL for presigned upload and download URLs, configured via environment variables.
+    /// Default TTL for presigned upload and download URLs.
     url_ttl_secs: u64,
+    /// TTL specifically for presigned ffprobe probe URLs.
+    probe_ttl_secs: u64,
 }
 
 #[derive(Debug, Error)]
@@ -64,7 +66,8 @@ impl R2Storage {
         Self {
             client: Client::from_conf(sdk_config),
             bucket_name: config.r2_bucket_name.clone(),
-            url_ttl_secs: config.presigned_upload_ttl_secs.get(),
+            url_ttl_secs: config.storage.presigned_upload_ttl_secs,
+            probe_ttl_secs: config.storage.presigned_probe_ttl_secs,
         }
     }
 
@@ -115,7 +118,7 @@ impl Storage for R2Storage {
     }
 
     async fn create_download_url(&self, key: &RawUploadKey) -> Result<Url, R2StorageError> {
-        self.presign_get(key, self.url_ttl_secs).await
+        self.presign_get(key, self.probe_ttl_secs).await
     }
 
     async fn create_transmux_upload_url(

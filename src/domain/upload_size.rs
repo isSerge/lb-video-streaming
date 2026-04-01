@@ -1,6 +1,6 @@
 //! Domain types for upload size validation.
 
-use crate::config::Config;
+use crate::config::ServerConfig;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -13,6 +13,12 @@ pub struct UploadSizeBytes(u64);
 /// Maximum allowed upload size in bytes.
 #[derive(Debug, Clone, Copy)]
 pub struct MaxUploadBytes(u64);
+
+impl From<u64> for MaxUploadBytes {
+    fn from(limit: u64) -> Self {
+        Self(limit)
+    }
+}
 
 /// Validation errors when parsing upload size input.
 #[derive(Debug, Error)]
@@ -73,9 +79,9 @@ impl TryFrom<(UploadSizeBytes, MaxUploadBytes)> for UploadSizeBytes {
     }
 }
 
-impl From<&Config> for MaxUploadBytes {
-    fn from(config: &Config) -> Self {
-        Self(config.max_upload_bytes.get())
+impl From<&ServerConfig> for MaxUploadBytes {
+    fn from(config: &ServerConfig) -> Self {
+        Self(config.max_upload_bytes)
     }
 }
 

@@ -1,7 +1,5 @@
 //! Upload-related API handlers.
 
-use std::num::NonZeroU64;
-
 use axum::{
     extract::{Json, State},
     http::StatusCode,
@@ -30,7 +28,7 @@ pub struct UploadUrlResponse {
     upload_url: Url,
     upload_complete_url: UploadCompletePath,
     video_url: VideoMetadataPath,
-    expires_in_secs: NonZeroU64,
+    expires_in_secs: u64,
 }
 
 /// Create an upload session and return a short-lived presigned PUT URL.
@@ -41,7 +39,7 @@ pub async fn create_upload_url(
     let content_type = req.content_type.unwrap_or_default();
     let size_bytes = UploadSizeBytes::try_from((
         req.size_bytes.unwrap_or_default(),
-        MaxUploadBytes::from(state.config.as_ref()),
+        MaxUploadBytes::from(&state.config.server),
     ))?;
 
     let ulid = Ulid::new();
@@ -62,7 +60,7 @@ pub async fn create_upload_url(
         upload_url,
         upload_complete_url: UploadCompletePath::from(ulid),
         video_url: VideoMetadataPath::from(ulid),
-        expires_in_secs: state.config.presigned_upload_ttl_secs,
+        expires_in_secs: state.config.storage.presigned_upload_ttl_secs,
     }))
 }
 
