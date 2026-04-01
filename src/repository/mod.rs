@@ -102,8 +102,8 @@ impl VideoRepository for PgVideoRepository {
                 ulid,
                 status: r.status,
                 raw_key: r.raw_key.into(),
-                transmux_key: r.transmux_key.map(Into::into),
-                manifest_key: r.manifest_key.map(Into::into),
+                transmux_key: r.transmux_key.map(TransmuxKey::from_persisted),
+                manifest_key: r.manifest_key.map(ManifestKey::from_persisted),
                 browser_compatible: r.browser_compatible,
                 transmux_required: r.transmux_required,
                 transcode_required: r.transcode_required,
@@ -723,7 +723,7 @@ mod tests {
             .await
             .unwrap();
 
-        let manifest_key = ManifestKey::from(ulid.to_string());
+        let manifest_key = ManifestKey::new(ulid);
         repository
             .set_manifest_key(ulid, &manifest_key)
             .await

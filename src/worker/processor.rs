@@ -202,7 +202,7 @@ impl VideoProcessor {
         update_handle.await?;
 
         // Upload manifest
-        let manifest_key = ManifestKey::from(ulid.to_string());
+        let manifest_key = ManifestKey::new(ulid);
         let upload_content_type = UploadContentType::from_str("application/vnd.apple.mpegurl")?;
         let manifest_url = self
             .storage
@@ -543,13 +543,13 @@ mod tests {
     async fn run_hls_transcode_orchestrates_successfully() {
         let ulid = Ulid::new();
         let _temp_dir = tempfile::tempdir().unwrap();
-        let manifest_key = ManifestKey::from(ulid.to_string());
+        let manifest_key = ManifestKey::new(ulid);
         let manifest_key_clone = manifest_key.clone();
 
         let mut repo = MockVideoRepository::new();
         let mut record = mock_video_record(ulid, false);
         // Simulate a transmuxed file exists to trigger cleanup
-        let transmux_key = TransmuxKey::from("transmux.mp4".to_string());
+        let transmux_key = TransmuxKey::new(ulid, ContainerFormat::Mp4);
         record.transmux_key = Some(transmux_key.clone());
 
         // Expect status update to "transcoding" before starting

@@ -7,12 +7,8 @@ use tokio::sync::{Semaphore, mpsc};
 use ulid::Ulid;
 
 use crate::{
-    domain::{ContainerFormat, UploadContentTypeError},
-    file_transfer::FileTransferError,
-    media_probe::FfprobeError,
-    media_transcoder::TranscoderError,
-    repository::VideoRepository,
-    storage::R2StorageError,
+    domain::UploadContentTypeError, file_transfer::FileTransferError, media_probe::FfprobeError,
+    media_transcoder::TranscoderError, repository::VideoRepository, storage::R2StorageError,
 };
 
 /// Errors that can occur during worker operations, including video processing and cleanup tasks.
@@ -30,17 +26,11 @@ pub enum WorkerError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("ffmpeg transmux failed: {0}")]
-    Ffmpeg(String),
-
     #[error("video not found: {0}")]
     NotFound(Ulid),
 
     #[error("invalid upload content type: {0}")]
     InvalidContentType(#[from] UploadContentTypeError),
-
-    #[error("unsupported container for transmux: {0:?}")]
-    UnsupportedContainer(ContainerFormat),
 
     #[error("cannot determine transmux target container")]
     NoTargetContainer,

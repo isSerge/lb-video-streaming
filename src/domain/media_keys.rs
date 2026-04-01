@@ -11,13 +11,18 @@ use crate::domain::ContainerFormat;
 pub struct TransmuxKey(String);
 
 impl TransmuxKey {
+    /// Create a new, strongly-typed key for a newly transmuxed file.
     pub fn new(ulid: Ulid, container: ContainerFormat) -> Self {
-        let ext = match container {
-            ContainerFormat::Mp4 => "mp4",
-            ContainerFormat::Webm => "webm",
-            _ => "mp4", // fallback, should not happen
-        };
-        Self(format!("transmux/{}/output.{}", ulid, ext))
+        Self(format!(
+            "transmux/{}/output.{}",
+            ulid,
+            container.extension()
+        ))
+    }
+
+    /// Reconstruct a key from a string previously persisted in the database.
+    pub fn from_persisted(key: String) -> Self {
+        Self(key)
     }
 }
 
@@ -25,15 +30,15 @@ impl TransmuxKey {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ManifestKey(String);
 
-impl From<String> for TransmuxKey {
-    fn from(value: String) -> Self {
-        Self(value)
+impl ManifestKey {
+    /// Create a new, strongly-typed key for a newly generated HLS manifest.
+    pub fn new(ulid: Ulid) -> Self {
+        Self(format!("hls/{}/manifest.m3u8", ulid))
     }
-}
 
-impl From<String> for ManifestKey {
-    fn from(value: String) -> Self {
-        Self(value)
+    /// Reconstruct a key from a string previously persisted in the database.
+    pub fn from_persisted(key: String) -> Self {
+        Self(key)
     }
 }
 
