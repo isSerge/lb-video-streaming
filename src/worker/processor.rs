@@ -304,7 +304,7 @@ mod tests {
     use super::*;
     use crate::{
         domain::{AudioCodec, ContainerFormat, MediaMetadata, RawUploadKey, VideoCodec},
-        file_transfer::port::MockFileTransfer,
+        file_transfer::{FileTransferError, port::MockFileTransfer},
         media_probe::port::MockMediaProbe,
         media_transcoder::{TranscoderError, port::MockMediaTranscoder},
         repository::port::MockVideoRepository,
@@ -712,5 +712,50 @@ mod tests {
                 TranscoderError::TranscodeFailed { .. }
             ))
         ));
+    }
+
+    #[tokio::test]
+    async fn upload_segments_bubbles_error_if_any_transfer_fails() {
+        let ulid = Ulid::new();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let hls_dir = temp_dir.path().join("hls");
+        std::fs::create_dir_all(&hls_dir).unwrap();
+
+        // Create 3 dummy .ts files
+        std::fs::write(hls_dir.join("segment_001.ts"), "data").unwrap();
+        std::fs::write(hls_dir.join("segment_002.ts"), "data").unwrap();
+        std::fs::write(hls_dir.join("segment_003.ts"), "data").unwrap();
+
+        let mut storage = MockStorage::new();
+        storage
+            .expect_create_hls_segment_upload_url()
+            .returning(|_, _| Ok(dummy_url()));
+
+        let mut file_transfer = MockFileTransfer::new();
+        // Simulate a failure on the second file, success on others
+        file_transfer.expect_upload().returning(|path, _, _| {
+            if path.ends_with("segment_002.ts") {
+                Err(FileTransferError::Io(std::io::Error::other(
+                    "simulated network error",
+                )))
+            } else {
+                Ok(())
+            }
+        });
+
+        let processor = VideoProcessor::new(
+            Arc::new(MockVideoRepository::new()),
+            Arc::new(storage),
+            Arc::new(MockMediaProbe::new()),
+            Arc::new(MockMediaTranscoder::new()),
+            Arc::new(file_transfer),
+            dummy_worker_config(),
+        );
+
+        let result = processor.upload_segments(ulid, &hls_dir).await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("simulated network error"));
     }
 }
