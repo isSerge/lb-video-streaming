@@ -20,7 +20,5 @@ pub trait MediaTranscoder: Send + Sync {
         &self,
         input_path: &Path,
         output_dir: &Path,
-        progress_tx: tokio::sync::watch::Sender<()>,
-        heartbeat_interval: std::time::Duration,
     ) -> Result<PathBuf, TranscoderError>;
 }

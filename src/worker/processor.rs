@@ -1,9 +1,6 @@
 use std::{io, path::Path, str::FromStr, sync::Arc, time::Duration};
 
-use tokio::{
-    sync::{Semaphore, watch},
-    task::JoinSet,
-};
+use tokio::{sync::Semaphore, task::JoinSet};
 use ulid::Ulid;
 
 use super::WorkerError;
@@ -168,38 +165,32 @@ impl VideoProcessor {
         let output_dir = temp_dir.path().join("hls");
         tokio::fs::create_dir_all(&output_dir).await?;
 
-        // Create watch channel and spawn task to update updated_at timestamp in the repository during transcoding.
-        // TODO: Consider evolving this to a state-based progress update (e.g. watch<TranscodeStatus>)
-        // to allow reporting real-time progress (percentage, frame count) from the transcoder.
-        let (progress_tx, mut progress_rx) = watch::channel(());
+        // Spawn the keep-alive ticker to update the video's updated_at timestamp periodically while transcoding is in progress
+        let repo_clone = self.repository.clone();
+        let interval_secs = self.config.transcode_heartbeat_interval_secs;
 
-        let repo = self.repository.clone();
-        let update_handle = tokio::spawn(async move {
+        let keep_alive = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
             loop {
-                if progress_rx.changed().await.is_err() {
-                    tracing::debug!("transcode progress channel closed, ffmpeg finished");
-                    break; // sender dropped, transcoding finished
-                }
-                tracing::info!("transcode heartbeat — ffmpeg still running");
-                if let Err(e) = repo.update_updated_at(ulid).await {
+                interval.tick().await;
+                tracing::debug!("transcode heartbeat \u{2014} ffmpeg still running");
+                if let Err(e) = repo_clone.update_updated_at(ulid).await {
                     tracing::error!(error = %e, "failed to update updated_at");
                 }
             }
         });
 
-        // Run the HLS transcoding process, which generates segments and a manifest file
-        let manifest_path = self
+        // Run the HLS transcoding process, which generates segments and manifest in the output directory.
+        let transcode_result = self
             .transcoder
-            .hls_transcode(
-                &input_path,
-                &output_dir,
-                progress_tx,
-                Duration::from_secs(self.config.transcode_heartbeat_interval_secs),
-            )
-            .await?;
+            .hls_transcode(&input_path, &output_dir)
+            .await;
 
-        // Wait for the update task to finish
-        update_handle.await?;
+        // Kill the keep-alive loop immediately after transcoding finishes, whether it succeeded or failed, to avoid unnecessary database updates.
+        keep_alive.abort();
+
+        // If transcoding failed, return the error without proceeding to uploads or database updates.
+        let manifest_path = transcode_result?;
 
         // Upload manifest
         let manifest_key = ManifestKey::new(ulid);
@@ -635,16 +626,11 @@ mod tests {
         // HLS transcode should be called
         transcoder
             .expect_hls_transcode()
-            .withf(
-                |in_path: &Path,
-                 out_dir: &Path,
-                 _: &tokio::sync::watch::Sender<()>,
-                 _: &Duration| {
-                    in_path.ends_with("input") && out_dir.ends_with("hls")
-                },
-            )
+            .withf(|in_path: &Path, out_dir: &Path| {
+                in_path.ends_with("input") && out_dir.ends_with("hls")
+            })
             .once()
-            .returning(|_, out_dir, _, _| {
+            .returning(|_, out_dir| {
                 let manifest = out_dir.join("manifest.m3u8");
                 std::fs::create_dir_all(out_dir).unwrap();
                 std::fs::write(&manifest, "dummy manifest").unwrap();

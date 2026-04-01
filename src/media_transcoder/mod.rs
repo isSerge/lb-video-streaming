@@ -1,11 +1,7 @@
 pub mod port;
 pub use port::MediaTranscoder;
 
-use std::{
-    path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::process::Command;
 
@@ -80,13 +76,11 @@ impl MediaTranscoder for Ffmpeg {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, progress_tx), fields(heartbeat_interval = ?heartbeat_interval))]
+    #[tracing::instrument(skip(self))]
     async fn hls_transcode(
         &self,
         input_path: &Path,
         output_dir: &Path,
-        progress_tx: tokio::sync::watch::Sender<()>,
-        heartbeat_interval: Duration,
     ) -> Result<PathBuf, TranscoderError> {
         let manifest_path = output_dir.join("manifest.m3u8");
 
@@ -113,20 +107,7 @@ impl MediaTranscoder for Ffmpeg {
             .arg(output_dir.join("segment_%03d.ts").as_os_str());
         cmd.arg(&manifest_path);
 
-        let child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-
-        // Spawn a task to periodically send progress updates until the transcoding process completes
-        let progress_handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(heartbeat_interval).await;
-                if progress_tx.send(()).is_err() {
-                    break; // receiver dropped
-                }
-            }
-        });
-
-        let output = child.wait_with_output().await?;
-        progress_handle.abort(); // stop sending progress updates after process exits
+        let output = cmd.output().await?;
 
         tracing::info!(status = %output.status, "ffmpeg HLS transcode exited");
 
