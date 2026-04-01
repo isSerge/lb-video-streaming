@@ -22,7 +22,7 @@ impl TransmuxKey {
 }
 
 /// Storage key for HLS manifest object.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ManifestKey(String);
 
 impl From<String> for TransmuxKey {

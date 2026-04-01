@@ -73,7 +73,7 @@ impl VideoProcessor {
             // Run HLS transcoding step
             self.run_hls_transcode(ulid, &record_updated).await?;
         } else {
-            // Skip directly to HLS transcoding 
+            // Skip directly to HLS transcoding
             self.run_hls_transcode(ulid, &record).await?;
         }
 
@@ -203,6 +203,8 @@ impl VideoProcessor {
 
         tracing::info!(%ulid, "HLS transcode completed");
 
+        // TODO: Add cleanup of the transmuxed file after HLS is done
+
         Ok(())
     }
 
@@ -321,9 +323,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_skips_transmux_when_not_required() {
+    async fn process_skips_transmux_when_not_required_and_does_transcode() {
         let ulid = Ulid::new();
+        let temp_root = tempfile::tempdir().unwrap().keep();
         let mut repo = MockVideoRepository::new();
+        let manifest_key = ManifestKey::from(ulid.to_string());
+        let manifest_key_clone = manifest_key.clone();
 
         // Return a record where transmux_required = false
         repo.expect_find_video_by_ulid()
@@ -331,20 +336,95 @@ mod tests {
             .once()
             .returning(move |_| Ok(Some(mock_video_record(ulid, false))));
 
-        // NO other mocks should be called.
+        // Expect update updated_at to be called during transcoding
+        repo.expect_update_updated_at()
+            .with(eq(ulid))
+            .once()
+            .returning(|_| Ok(()));
+
+        // Expect the manifest key to be set with the correct value after transcoding
+        repo.expect_set_manifest_key()
+            .withf(move |u, key| *u == ulid && *key == manifest_key)
+            .once()
+            .returning(|_, _| Ok(()));
+
+        // Update status to "ready" after transcoding
+        repo.expect_update_status()
+            .with(eq(ulid), eq(VideoStatus::Ready))
+            .once()
+            .returning(|_, _| Ok(()));
+
+        let mut storage = MockStorage::new();
+
+        // Expect a download URL to be created for the raw key
+        storage
+            .expect_create_download_url()
+            .once()
+            .returning(|_| Ok(dummy_url()));
+
+        // Expect a manifest upload URL to be created with the correct key and content type
+        storage
+            .expect_create_manifest_upload_url()
+            .withf(move |key, ct| {
+                *key == manifest_key_clone && &**ct == "application/vnd.apple.mpegurl"
+            })
+            .once()
+            .returning(|_, _| Ok(dummy_url()));
+
+        let mut file_transfer = MockFileTransfer::new();
+
+        // Expect the raw file to be downloaded to the correct path
+        file_transfer
+            .expect_download()
+            .withf(|url: &Url, path: &Path| {
+                url.as_str() == dummy_url().as_str() && path.ends_with("input")
+            })
+            .once()
+            .returning(|_, _| Ok(()));
+
+        // Expect the manifest file to be uploaded from the correct path with the correct content type
+        file_transfer
+            .expect_upload()
+            .withf(|path: &Path, url: &Url, ct: &UploadContentType| {
+                path.ends_with("manifest.m3u8")
+                    && url.as_str() == dummy_url().as_str()
+                    && &**ct == "application/vnd.apple.mpegurl"
+            })
+            .once()
+            .returning(|_, _, _| Ok(()));
+
+        let mut transcoder = MockMediaTranscoder::new();
+
+        // HLS transcode should be called
+        transcoder
+            .expect_hls_transcode()
+            .withf(|in_path: &Path, out_dir: &Path| {
+                in_path.ends_with("input") && out_dir.ends_with("hls")
+            })
+            .once()
+            .returning(|_, out_dir| {
+                let manifest = out_dir.join("manifest.m3u8");
+                std::fs::create_dir_all(out_dir).unwrap();
+                std::fs::write(&manifest, "dummy manifest").unwrap();
+                Ok(manifest)
+            });
 
         let processor = VideoProcessor::new(
             Arc::new(repo),
-            Arc::new(MockStorage::new()),
+            Arc::new(storage),
             Arc::new(MockMediaProbe::new()),
-            Arc::new(MockMediaTranscoder::new()),
-            Arc::new(MockFileTransfer::new()),
-            std::env::temp_dir(),
+            Arc::new(transcoder),
+            Arc::new(file_transfer),
+            temp_root,
             SEGMENT_UPLOAD_CONCURRENCY,
         );
 
         let result = processor.process(ulid).await;
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "expected process to succeed but got error: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -355,10 +435,7 @@ mod tests {
         let mut repo = MockVideoRepository::new();
 
         // Return a record where transmux_required = true
-        repo.expect_find_video_by_ulid()
-            .with(eq(ulid))
-            .once()
-            .returning(move |_| Ok(Some(mock_video_record(ulid, true))));
+        let record = mock_video_record(ulid, true);
 
         // Expect status updates to "transmuxing" and then "transcoding"
         repo.expect_update_status()
@@ -454,8 +531,12 @@ mod tests {
             SEGMENT_UPLOAD_CONCURRENCY,
         );
 
-        let result = processor.process(ulid).await;
-        assert!(result.is_ok());
+        let result = processor.run_transmux(ulid, &record).await;
+        assert!(
+            result.is_ok(),
+            "expected run_transmux to succeed but got error: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -515,5 +596,106 @@ mod tests {
 
         let result = processor.process(ulid).await;
         assert!(matches!(result, Err(WorkerError::NoTargetContainer)));
+    }
+
+    #[tokio::test]
+    async fn run_hls_transcode_orchestrates_successfully() {
+        let ulid = Ulid::new();
+        let temp_root = tempfile::tempdir().unwrap().keep();
+        let manifest_key = ManifestKey::from(ulid.to_string());
+        let manifest_key_clone = manifest_key.clone();
+
+        let mut repo = MockVideoRepository::new();
+        let record = mock_video_record(ulid, false);
+
+        // Expect update updated_at to be called during transcoding
+        repo.expect_update_updated_at()
+            .with(eq(ulid))
+            .once()
+            .returning(|_| Ok(()));
+
+        // Expect the manifest key to be set with the correct value after transcoding
+        repo.expect_set_manifest_key()
+            .withf(move |u, key| *u == ulid && *key == manifest_key)
+            .once()
+            .returning(|_, _| Ok(()));
+
+        // Update status to "ready" after transcoding
+        repo.expect_update_status()
+            .with(eq(ulid), eq(VideoStatus::Ready))
+            .once()
+            .returning(|_, _| Ok(()));
+
+        let mut storage = MockStorage::new();
+
+        // Expect a download URL to be created for the raw key
+        storage
+            .expect_create_download_url()
+            .once()
+            .returning(|_| Ok(dummy_url()));
+
+        // Expect a manifest upload URL to be created with the correct key and content type
+        storage
+            .expect_create_manifest_upload_url()
+            .withf(move |key, ct| {
+                *key == manifest_key_clone && &**ct == "application/vnd.apple.mpegurl"
+            })
+            .once()
+            .returning(|_, _| Ok(dummy_url()));
+
+        let mut file_transfer = MockFileTransfer::new();
+
+        // Expect the raw file to be downloaded to the correct path
+        file_transfer
+            .expect_download()
+            .withf(|url: &Url, path: &Path| {
+                url.as_str() == dummy_url().as_str() && path.ends_with("input")
+            })
+            .once()
+            .returning(|_, _| Ok(()));
+
+        // Expect the manifest file to be uploaded from the correct path with the correct content type
+        file_transfer
+            .expect_upload()
+            .withf(|path: &Path, url: &Url, ct: &UploadContentType| {
+                path.ends_with("manifest.m3u8")
+                    && url.as_str() == dummy_url().as_str()
+                    && &**ct == "application/vnd.apple.mpegurl"
+            })
+            .once()
+            .returning(|_, _, _| Ok(()));
+
+        let mut transcoder = MockMediaTranscoder::new();
+
+        // HLS transcode should be called
+        transcoder
+            .expect_hls_transcode()
+            .withf(|in_path: &Path, out_dir: &Path| {
+                in_path.ends_with("input") && out_dir.ends_with("hls")
+            })
+            .once()
+            .returning(|_, out_dir| {
+                let manifest = out_dir.join("manifest.m3u8");
+                std::fs::create_dir_all(out_dir).unwrap();
+                std::fs::write(&manifest, "dummy manifest").unwrap();
+                Ok(manifest)
+            });
+
+        let processor = VideoProcessor::new(
+            Arc::new(repo),
+            Arc::new(storage),
+            Arc::new(MockMediaProbe::new()),
+            Arc::new(transcoder),
+            Arc::new(file_transfer),
+            temp_root,
+            SEGMENT_UPLOAD_CONCURRENCY,
+        );
+
+        let result = processor.run_hls_transcode(ulid, &record).await;
+        assert!(
+            result.is_ok(),
+            "expected run_hls_transcode to succeed but got error: {:?}",
+            result.err()
+        );
     }
 }
