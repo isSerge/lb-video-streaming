@@ -10,7 +10,7 @@ use url::{ParseError, Url};
 
 use crate::{
     config::Config,
-    domain::{RawUploadKey, TransmuxKey, UploadContentType},
+    domain::{HLSKey, ManifestKey, RawUploadKey, TransmuxKey, UploadContentType},
 };
 
 /// Holds storage resources for interacting with Cloudflare R2.
@@ -118,6 +118,26 @@ impl Storage for R2Storage {
     async fn create_transmux_upload_url(
         &self,
         key: &TransmuxKey,
+        content_type: &UploadContentType,
+    ) -> Result<Url, R2StorageError> {
+        self.presign_put(key, content_type).await
+    }
+
+    async fn create_transmux_download_url(&self, key: &TransmuxKey) -> Result<Url, R2StorageError> {
+        self.presign_get(key, self.url_ttl_secs).await
+    }
+
+    async fn create_manifest_upload_url(
+        &self,
+        key: &ManifestKey,
+        content_type: &UploadContentType,
+    ) -> Result<Url, R2StorageError> {
+        self.presign_put(key, content_type).await
+    }
+
+    async fn create_hls_segment_upload_url(
+        &self,
+        key: &HLSKey,
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError> {
         self.presign_put(key, content_type).await

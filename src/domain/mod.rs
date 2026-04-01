@@ -9,7 +9,7 @@ mod upload_size;
 mod video_status;
 
 pub use api_path::{UploadCompletePath, VideoMetadataPath};
-pub use media_keys::{ManifestKey, TransmuxKey};
+pub use media_keys::{HLSKey, ManifestKey, TransmuxKey};
 pub use media_metadata::{
     AudioCodec, ContainerFormat, FormatCompatibility, MediaMetadata, VideoCodec,
 };

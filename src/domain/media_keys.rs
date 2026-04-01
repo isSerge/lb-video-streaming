@@ -52,3 +52,21 @@ impl Deref for ManifestKey {
         &self.0
     }
 }
+
+/// Storage key for HLS segment object.
+#[derive(Debug)]
+pub struct HLSKey(String);
+
+impl HLSKey {
+    pub fn new(ulid: Ulid, segment_name: &str) -> Self {
+        Self(format!("hls/{}/{}", ulid, segment_name))
+    }
+}
+
+impl Deref for HLSKey {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
