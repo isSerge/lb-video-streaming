@@ -234,7 +234,9 @@ impl VideoProcessor {
             }
         }
 
-        // TODO: Consider a policy for cleaning up the raw file after successful HLS transcoding.
+        // Note: We do NOT delete the raw file here. 
+        // As per the architecture doc, raw file cleanup is handled seamlessly 
+        // by a Cloudflare R2 Object Lifecycle rule (e.g., 30-day expiration).
 
         Ok(())
     }
