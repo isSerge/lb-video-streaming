@@ -36,6 +36,10 @@ pub struct WorkerConfig {
     pub zombie_sweep_interval_secs: u64,
     /// Buffer size for the channel used to communicate upload completion events to the worker.
     pub worker_channel_buffer_size: usize,
+    /// Timeout in seconds for establishing a connection during file transfers.
+    pub http_connect_timeout_secs: u64,
+    /// Timeout in seconds for reading a chunk of data during file transfers.
+    pub http_read_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +94,8 @@ impl Config {
                 zombie_timeout_secs: parse(map, "ZOMBIE_TIMEOUT_SECS", 7200u64)?,
                 zombie_sweep_interval_secs: parse(map, "ZOMBIE_SWEEP_INTERVAL_SECS", 3600u64)?,
                 worker_channel_buffer_size: parse(map, "WORKER_CHANNEL_BUFFER_SIZE", 100usize)?,
+                http_connect_timeout_secs: parse(map, "HTTP_CONNECT_TIMEOUT_SECS", 10u64)?,
+                http_read_timeout_secs: parse(map, "HTTP_READ_TIMEOUT_SECS", 30u64)?,
             },
             server: ServerConfig {
                 host: parse(map, "SERVER_HOST", IpAddr::V4(Ipv4Addr::UNSPECIFIED))?,

@@ -30,6 +30,9 @@ enum AppError {
 
     #[error("network error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("request error: {0}")]
+    Request(#[from] reqwest::Error),
 }
 
 // TODO: add graceful shutdown
@@ -64,7 +67,13 @@ async fn main() -> Result<(), AppError> {
     let storage: Arc<dyn Storage> = Arc::new(r2_storage);
     let media_probe: Arc<dyn MediaProbe> = Arc::new(Ffprobe::default());
     let media_transcoder: Arc<dyn MediaTranscoder> = Arc::new(media_transcoder::Ffmpeg::default());
-    let http_client = reqwest::Client::new(); // Default has no timeout which is desirable
+
+    // connect_timeout and a read_timeout apply to gaps between chunks
+    let http_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(config.worker.http_connect_timeout_secs))
+        .read_timeout(Duration::from_secs(config.worker.http_read_timeout_secs))
+        .build()?;
+
     let file_transfer: Arc<dyn FileTransfer> = Arc::new(HttpFileTransfer::new(http_client));
 
     // Create a channel for communicating upload completion events to the worker.

@@ -339,6 +339,8 @@ mod tests {
             zombie_timeout_secs: 7200.try_into().unwrap(),
             zombie_sweep_interval_secs: 3600.try_into().unwrap(),
             worker_channel_buffer_size: 100,
+            http_connect_timeout_secs: 10.try_into().unwrap(),
+            http_read_timeout_secs: 30.try_into().unwrap(),
         }
     }
 
