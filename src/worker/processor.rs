@@ -60,10 +60,22 @@ impl VideoProcessor {
             .ok_or(WorkerError::NotFound(ulid))?;
 
         if record.transmux_required {
+            // Run transmuxing step
             self.run_transmux(ulid, &record).await?;
-        }
 
-        // TODO: add other processing steps like transcoding here
+            // Re-fetch the record after transmuxing to get updated keys and status for the next steps
+            let record_updated = self
+                .repository
+                .find_video_by_ulid(ulid)
+                .await?
+                .ok_or(WorkerError::NotFound(ulid))?;
+
+            // Run HLS transcoding step
+            self.run_hls_transcode(ulid, &record_updated).await?;
+        } else {
+            // Skip directly to HLS transcoding 
+            self.run_hls_transcode(ulid, &record).await?;
+        }
 
         Ok(())
     }
@@ -132,6 +144,8 @@ impl VideoProcessor {
     async fn run_hls_transcode(&self, ulid: Ulid, record: &VideoRecord) -> Result<(), WorkerError> {
         tracing::info!(%ulid, "starting HLS transcoding");
 
+        // TODO: think about whether we want to update status to "transcoding" here
+
         // Create a temp directory
         let temp_dir = tempfile::tempdir_in(&self.temp_root)?;
 
@@ -178,6 +192,16 @@ impl VideoProcessor {
 
         // Update timestamp after all uploads
         self.repository.update_updated_at(ulid).await?;
+
+        // Set the manifest key and update status to "ready" after successful uploads
+        self.repository
+            .set_manifest_key(ulid, &manifest_key)
+            .await?;
+        self.repository
+            .update_status(ulid, VideoStatus::Ready)
+            .await?;
+
+        tracing::info!(%ulid, "HLS transcode completed");
 
         Ok(())
     }
