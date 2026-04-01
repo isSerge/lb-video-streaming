@@ -176,6 +176,27 @@ impl VideoRepository for PgVideoRepository {
         .await?;
         Ok(())
     }
+
+    async fn set_manifest_key(&self, ulid: Ulid, key: &ManifestKey) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "UPDATE videos SET manifest_key = $1, updated_at = NOW() WHERE ulid = $2",
+            &**key,
+            ulid.to_string()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_updated_at(&self, ulid: Ulid) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "UPDATE videos SET updated_at = NOW() WHERE ulid = $1",
+            ulid.to_string()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -680,6 +701,29 @@ mod tests {
                 .unwrap()
                 .status,
             VideoStatus::Uploaded.as_ref()
+        );
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn set_manifest_key_updates_key(pool: PgPool) {
+        let repository = PgVideoRepository::with_pool(pool.clone());
+        let ulid = ulid("01ARZ3NDEKTSV4RRFFQ69G5FF2");
+
+        repository
+            .create_pending_video(ulid, &raw_key(ulid), &content_type("video/mp4"), 100)
+            .await
+            .unwrap();
+
+        let manifest_key = ManifestKey::from(ulid.to_string());
+        repository
+            .set_manifest_key(ulid, &manifest_key)
+            .await
+            .unwrap();
+
+        let found = repository.find_video_by_ulid(ulid).await.unwrap().unwrap();
+        assert_eq!(
+            found.manifest_key.as_ref().map(|k| &**k),
+            Some(&*manifest_key)
         );
     }
 }

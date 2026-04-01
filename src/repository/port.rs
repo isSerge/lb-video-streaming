@@ -3,7 +3,7 @@ use std::num::NonZeroU64;
 use ulid::Ulid;
 
 use crate::domain::{
-    FormatCompatibility, RawUploadKey, TransmuxKey, UploadContentType, VideoStatus,
+    FormatCompatibility, ManifestKey, RawUploadKey, TransmuxKey, UploadContentType, VideoStatus,
 };
 
 use super::VideoRecord;
@@ -59,4 +59,10 @@ pub trait VideoRepository: Send + Sync {
 
     /// Set the R2 key for a successfully processed video, used by the worker after uploading the output.
     async fn set_transmux_key(&self, ulid: Ulid, key: &TransmuxKey) -> Result<(), sqlx::Error>;
+
+    /// Set the manifest key for a video (HLS output).
+    async fn set_manifest_key(&self, ulid: Ulid, key: &ManifestKey) -> Result<(), sqlx::Error>;
+
+    /// Update the `updated_at` timestamp to prevent zombie detection for long-running jobs, used by the worker to send heartbeats while processing.
+    async fn update_updated_at(&self, ulid: Ulid) -> Result<(), sqlx::Error>;
 }
