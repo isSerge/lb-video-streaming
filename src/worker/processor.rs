@@ -321,7 +321,7 @@ mod tests {
     fn mock_video_record(ulid: Ulid, transmux_required: bool) -> VideoRecord {
         VideoRecord {
             ulid,
-            status: "uploaded".to_string(),
+            status: VideoStatus::PendingUpload,
             raw_key: RawUploadKey::from(ulid),
             transmux_key: None,
             manifest_key: None,

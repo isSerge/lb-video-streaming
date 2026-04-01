@@ -15,6 +15,7 @@ use crate::{
     config::Config,
     domain::{
         AudioCodec, ContainerFormat, FormatCompatibility, MediaMetadata, RawUploadKey, VideoCodec,
+        VideoStatus,
     },
     media_probe::{FfprobeError, port::MockMediaProbe},
     repository::{VideoRecord, port::MockVideoRepository},
@@ -40,10 +41,10 @@ fn build_app(
     ))
 }
 
-fn video_record(ulid: Ulid, status: &str, browser_compatible: bool) -> VideoRecord {
+fn video_record(ulid: Ulid, status: VideoStatus, browser_compatible: bool) -> VideoRecord {
     VideoRecord {
         ulid,
-        status: status.to_string(),
+        status,
         raw_key: RawUploadKey::from(ulid),
         transmux_key: None,
         manifest_key: None,
@@ -104,7 +105,7 @@ async fn mark_upload_complete_sets_browser_compatible_for_h264_aac_mp4() {
     let mut repo = MockVideoRepository::new();
     repo.expect_find_video_by_ulid()
         .once()
-        .returning(move |_| Ok(Some(video_record(ulid, "pending_upload", false))));
+        .returning(move |_| Ok(Some(video_record(ulid, VideoStatus::PendingUpload, false))));
     repo.expect_mark_uploaded_with_compatibility()
         .once()
         .withf(|_, compat| *compat == FormatCompatibility::BrowserCompatible)
@@ -146,7 +147,7 @@ async fn mark_upload_complete_sets_transcode_required_for_hevc() {
     let mut repo = MockVideoRepository::new();
     repo.expect_find_video_by_ulid()
         .once()
-        .returning(move |_| Ok(Some(video_record(ulid, "pending_upload", false))));
+        .returning(move |_| Ok(Some(video_record(ulid, VideoStatus::PendingUpload, false))));
     repo.expect_mark_uploaded_with_compatibility()
         .once()
         .withf(|_, compat| *compat == FormatCompatibility::TranscodeRequired)
@@ -211,7 +212,7 @@ async fn mark_upload_complete_returns_500_when_probe_fails() {
     let mut repo = MockVideoRepository::new();
     repo.expect_find_video_by_ulid()
         .once()
-        .returning(move |_| Ok(Some(video_record(ulid, "pending_upload", false))));
+        .returning(move |_| Ok(Some(video_record(ulid, VideoStatus::PendingUpload, false))));
 
     let mut storage = MockStorage::new();
     storage
@@ -248,7 +249,7 @@ async fn mark_upload_complete_pushes_ulid_to_worker_channel() {
     let mut repo = MockVideoRepository::new();
     repo.expect_find_video_by_ulid()
         .once()
-        .returning(move |_| Ok(Some(video_record(ulid, "pending_upload", false))));
+        .returning(move |_| Ok(Some(video_record(ulid, VideoStatus::PendingUpload, false))));
     repo.expect_mark_uploaded_with_compatibility()
         .once()
         .returning(|_, _| Ok(true));
@@ -306,7 +307,7 @@ async fn get_video_metadata_returns_200_for_existing_video() {
     let mut repo = MockVideoRepository::new();
     repo.expect_find_video_by_ulid()
         .once()
-        .returning(move |_| Ok(Some(video_record(ulid, "uploaded", true))));
+        .returning(move |_| Ok(Some(video_record(ulid, VideoStatus::Uploaded, true))));
 
     let response = build_app(repo, MockStorage::new(), MockMediaProbe::new())
         .oneshot(

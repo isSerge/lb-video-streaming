@@ -32,7 +32,6 @@ pub async fn get_video_metadata(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let status: VideoStatus = row.status.parse()?;
     let raw_url = Some(state.config.public_object_url(&row.raw_key)?);
     let transmux_url = row
         .transmux_key
@@ -45,7 +44,7 @@ pub async fn get_video_metadata(
 
     Ok(Json(VideoMetadataResponse {
         ulid: row.ulid,
-        status,
+        status: row.status,
         browser_compatible: row.browser_compatible,
         transmux_required: row.transmux_required,
         transcode_required: row.transcode_required,
