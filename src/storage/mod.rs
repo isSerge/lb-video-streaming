@@ -31,6 +31,9 @@ pub enum R2StorageError {
 
     #[error(transparent)]
     InvalidUrl(#[from] ParseError),
+
+    #[error("storage operation failed: {0}")]
+    Internal(String),
 }
 
 impl R2Storage {
@@ -141,5 +144,17 @@ impl Storage for R2Storage {
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError> {
         self.presign_put(key, content_type).await
+    }
+
+    async fn delete_object(&self, key: &str) -> Result<(), R2StorageError> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| R2StorageError::Internal(e.to_string()))?;
+
+        Ok(())
     }
 }

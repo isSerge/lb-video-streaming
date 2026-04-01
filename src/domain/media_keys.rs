@@ -7,7 +7,7 @@ use ulid::Ulid;
 use crate::domain::ContainerFormat;
 
 /// Storage key for transmuxed MP4 output.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransmuxKey(String);
 
 impl TransmuxKey {

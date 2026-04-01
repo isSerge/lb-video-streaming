@@ -43,4 +43,7 @@ pub trait Storage: Send + Sync {
         key: &HLSKey,
         content_type: &UploadContentType,
     ) -> Result<Url, R2StorageError>;
+
+    /// Delete an object by key, used for cleanup after processing.
+    async fn delete_object(&self, key: &str) -> Result<(), R2StorageError>;
 }

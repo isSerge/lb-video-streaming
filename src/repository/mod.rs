@@ -197,6 +197,16 @@ impl VideoRepository for PgVideoRepository {
         .await?;
         Ok(())
     }
+
+    async fn clear_transmux_key(&self, ulid: Ulid) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "UPDATE videos SET transmux_key = NULL, updated_at = NOW() WHERE ulid = $1",
+            ulid.to_string()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

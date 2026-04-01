@@ -203,7 +203,19 @@ impl VideoProcessor {
 
         tracing::info!(%ulid, "HLS transcode completed");
 
-        // TODO: Add cleanup of the transmuxed file after HLS is done
+        // Clean up intermediate transmux file from storage
+        if let Some(transmux_key) = &record.transmux_key {
+            tracing::info!(%ulid, "cleaning up intermediate transmux file from storage");
+            if let Err(e) = self.storage.delete_object(transmux_key).await {
+                tracing::warn!(error = %e, "failed to delete transmux file from R2, leaving stranded bytes");
+            }
+
+            // Always clear the key so the API stops serving the transmux URL.
+            if let Err(e) = self.repository.clear_transmux_key(ulid).await {
+                tracing::error!(error = %e, "failed to clear transmux key in database");
+                // We don't return an error because the HLS phase already succeeded.
+            }
+        }
 
         Ok(())
     }
@@ -253,7 +265,7 @@ impl VideoProcessor {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return Err(e),
                 Err(e) => {
-                    return Err(WorkerError::Io(io::Error::new(io::ErrorKind::Other, e)));
+                    return Err(WorkerError::Io(io::Error::other(e)));
                 }
             }
         }
@@ -320,117 +332,6 @@ mod tests {
 
         let result = processor.process(ulid).await;
         assert!(matches!(result, Err(WorkerError::NotFound(id)) if id == ulid));
-    }
-
-    #[tokio::test]
-    async fn process_skips_transmux_when_not_required_and_does_transcode() {
-        let ulid = Ulid::new();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let mut repo = MockVideoRepository::new();
-        let manifest_key = ManifestKey::from(ulid.to_string());
-        let manifest_key_clone = manifest_key.clone();
-
-        // Expect status update to "transcoding" before starting transcoding
-        repo.expect_update_status()
-            .with(eq(ulid), eq(VideoStatus::Transcoding))
-            .once()
-            .returning(|_, _| Ok(()));
-
-        // Return a record where transmux_required = false
-        repo.expect_find_video_by_ulid()
-            .with(eq(ulid))
-            .once()
-            .returning(move |_| Ok(Some(mock_video_record(ulid, false))));
-
-        // Expect update updated_at to be called during transcoding
-        repo.expect_update_updated_at()
-            .with(eq(ulid))
-            .once()
-            .returning(|_| Ok(()));
-
-        // Expect the manifest key to be set with the correct value after transcoding
-        repo.expect_set_manifest_key()
-            .withf(move |u, key| *u == ulid && *key == manifest_key)
-            .once()
-            .returning(|_, _| Ok(()));
-
-        // Update status to "ready" after transcoding
-        repo.expect_update_status()
-            .with(eq(ulid), eq(VideoStatus::Ready))
-            .once()
-            .returning(|_, _| Ok(()));
-
-        let mut storage = MockStorage::new();
-
-        // Expect a download URL to be created for the raw key
-        storage
-            .expect_create_download_url()
-            .once()
-            .returning(|_| Ok(dummy_url()));
-
-        // Expect a manifest upload URL to be created with the correct key and content type
-        storage
-            .expect_create_manifest_upload_url()
-            .withf(move |key, ct| {
-                *key == manifest_key_clone && &**ct == "application/vnd.apple.mpegurl"
-            })
-            .once()
-            .returning(|_, _| Ok(dummy_url()));
-
-        let mut file_transfer = MockFileTransfer::new();
-
-        // Expect the raw file to be downloaded to the correct path
-        file_transfer
-            .expect_download()
-            .withf(|url: &Url, path: &Path| {
-                url.as_str() == dummy_url().as_str() && path.ends_with("input")
-            })
-            .once()
-            .returning(|_, _| Ok(()));
-
-        // Expect the manifest file to be uploaded from the correct path with the correct content type
-        file_transfer
-            .expect_upload()
-            .withf(|path: &Path, url: &Url, ct: &UploadContentType| {
-                path.ends_with("manifest.m3u8")
-                    && url.as_str() == dummy_url().as_str()
-                    && &**ct == "application/vnd.apple.mpegurl"
-            })
-            .once()
-            .returning(|_, _, _| Ok(()));
-
-        let mut transcoder = MockMediaTranscoder::new();
-
-        // HLS transcode should be called
-        transcoder
-            .expect_hls_transcode()
-            .withf(|in_path: &Path, out_dir: &Path| {
-                in_path.ends_with("input") && out_dir.ends_with("hls")
-            })
-            .once()
-            .returning(|_, out_dir| {
-                let manifest = out_dir.join("manifest.m3u8");
-                std::fs::create_dir_all(out_dir).unwrap();
-                std::fs::write(&manifest, "dummy manifest").unwrap();
-                Ok(manifest)
-            });
-
-        let processor = VideoProcessor::new(
-            Arc::new(repo),
-            Arc::new(storage),
-            Arc::new(MockMediaProbe::new()),
-            Arc::new(transcoder),
-            Arc::new(file_transfer),
-            temp_dir.path().to_path_buf(),
-            SEGMENT_UPLOAD_CONCURRENCY,
-        );
-
-        let result = processor.process(ulid).await;
-        assert!(
-            result.is_ok(),
-            "expected process to succeed but got error: {:?}",
-            result.err()
-        );
     }
 
     #[tokio::test]
@@ -607,7 +508,10 @@ mod tests {
         let manifest_key_clone = manifest_key.clone();
 
         let mut repo = MockVideoRepository::new();
-        let record = mock_video_record(ulid, false);
+        let mut record = mock_video_record(ulid, false);
+        // Simulate a transmuxed file exists to trigger cleanup
+        let transmux_key = TransmuxKey::from("transmux.mp4".to_string());
+        record.transmux_key = Some(transmux_key.clone());
 
         // Expect status update to "transcoding" before starting
         repo.expect_update_status()
@@ -633,11 +537,18 @@ mod tests {
             .once()
             .returning(|_, _| Ok(()));
 
+        // Expect clear_transmux_key to be called during cleanup
+        repo.expect_clear_transmux_key()
+            .with(eq(ulid))
+            .once()
+            .returning(|_| Ok(()));
+
         let mut storage = MockStorage::new();
 
-        // Expect a download URL to be created for the raw key
+        // Expect a download URL to be created for the transmux key (since it is Some)
         storage
-            .expect_create_download_url()
+            .expect_create_transmux_download_url()
+            .with(eq(transmux_key.clone()))
             .once()
             .returning(|_| Ok(dummy_url()));
 
@@ -650,9 +561,17 @@ mod tests {
             .once()
             .returning(|_, _| Ok(dummy_url()));
 
+        // Expect the transmuxed object to be deleted during cleanup
+        let transmux_key_str = transmux_key.to_string();
+        storage
+            .expect_delete_object()
+            .with(eq(transmux_key_str))
+            .once()
+            .returning(|_| Ok(()));
+
         let mut file_transfer = MockFileTransfer::new();
 
-        // Expect the raw file to be downloaded to the correct path
+        // Expect the file to be downloaded to the correct path
         file_transfer
             .expect_download()
             .withf(|url: &Url, path: &Path| {

@@ -65,4 +65,7 @@ pub trait VideoRepository: Send + Sync {
 
     /// Update the `updated_at` timestamp to prevent zombie detection for long-running jobs, used by the worker to send heartbeats while processing.
     async fn update_updated_at(&self, ulid: Ulid) -> Result<(), sqlx::Error>;
+
+    /// Clear the transmux key for a video, used by the worker to clean up the database after a successful upload of the processed video to R2.
+    async fn clear_transmux_key(&self, ulid: Ulid) -> Result<(), sqlx::Error>;
 }
