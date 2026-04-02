@@ -137,7 +137,7 @@ async fn main() -> Result<(), AppError> {
     let recovery_tx = worker_tx.clone();
 
     // Spawn a separate task to enqueue recovered jobs, main thread can continue starting the server without waiting for this to complete.
-    tokio::spawn(async move {
+    let recovery_handle = tokio::spawn(async move {
         tracing::info!(
             count = recovered.len(),
             "recovered pending jobs on startup, sending to worker"
@@ -171,12 +171,16 @@ async fn main() -> Result<(), AppError> {
         .await?;
 
     let bg_tasks = async {
-        let (cleanup_result, worker_result) = tokio::join!(cleanup_handle, worker_handle);
+        let (cleanup_result, worker_result, recovery_result) =
+            tokio::join!(cleanup_handle, worker_handle, recovery_handle);
         if let Err(e) = cleanup_result {
             tracing::error!("Cleanup task panicked: {}", e);
         }
         if let Err(e) = worker_result {
             tracing::error!("Worker task panicked: {}", e);
+        }
+        if let Err(e) = recovery_result {
+            tracing::error!("Recovery task panicked: {}", e);
         }
     };
 
