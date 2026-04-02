@@ -134,11 +134,24 @@ async fn main() -> Result<(), AppError> {
 
     // Recover jobs lost during restart by sending all pending uploads to the worker.
     let recovered = video_repository.recover_pending_jobs().await?;
-    for ulid in recovered {
-        // TODO: consider batching, rate-limiting or other strategies
-        // TODO: consider error handling and retry logic here to avoid losing jobs
-        let _ = worker_tx.send(ulid).await;
-    }
+    let recovery_tx = worker_tx.clone();
+
+    // Spawn a separate task to enqueue recovered jobs, main thread can continue starting the server without waiting for this to complete.
+    tokio::spawn(async move {
+        tracing::info!(
+            count = recovered.len(),
+            "recovered pending jobs on startup, sending to worker"
+        );
+
+        for ulid in recovered {
+            if let Err(e) = recovery_tx.send(ulid).await {
+                // If send fails, the receiver (worker) was dropped.
+                // We log the error and break. Jobs remain in the DB and won't be lost.
+                tracing::error!(error = %e, "failed to enqueue recovered job; worker receiver dropped");
+                break;
+            }
+        }
+    });
 
     let config_arc = Arc::new(config);
     let state = api::AppState::new(
