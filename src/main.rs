@@ -101,11 +101,7 @@ async fn main() -> Result<(), AppError> {
         Arc::clone(&file_transfer),
         config.worker.clone(),
     );
-    let mut worker = Worker::new(
-        worker_rx,
-        processor,
-        config.worker.max_concurrent_transcodes,
-    );
+    let mut worker = Worker::new(worker_rx, processor, config.worker.clone());
     let worker_video_repo_clone = Arc::clone(&video_repository);
     // TODO: use handlers during graceful shutdown to ensure all tasks are properly stopped and no jobs are lost
     let worker_token_clone = cancel_token.clone();

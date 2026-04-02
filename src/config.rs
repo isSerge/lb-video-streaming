@@ -24,6 +24,7 @@ pub struct Config {
     pub storage: StorageConfig,
 }
 
+// TODO: break it down
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     /// Maximum number of videos that can be transcoded in parallel.
@@ -48,6 +49,18 @@ pub struct WorkerConfig {
     pub transmux_timeout_secs: u64,
     /// Timeout in seconds for the HLS transcoding process.
     pub transcode_timeout_secs: u64,
+    /// Minimum delay for file transfer retries.
+    pub file_transfer_retry_min_delay_ms: u64,
+    /// Maximum delay for file transfer retries.
+    pub file_transfer_retry_max_delay_ms: u64,
+    /// Maximum number of retry attempts for file transfers.
+    pub file_transfer_retry_max_times: usize,
+    /// Number of consecutive failures before the worker circuit breaker opens.
+    pub circuit_breaker_failure_threshold: u32,
+    /// Minimum recovery delay in seconds for the circuit breaker.
+    pub circuit_breaker_min_recovery_secs: u64,
+    /// Maximum recovery delay in seconds for the circuit breaker.
+    pub circuit_breaker_max_recovery_secs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +119,32 @@ impl Config {
                 http_read_timeout_secs: parse(map, "HTTP_READ_TIMEOUT_SECS", 30u64)?,
                 transmux_timeout_secs: parse(map, "TRANSMUX_TIMEOUT_SECS", 300u64)?,
                 transcode_timeout_secs: parse(map, "TRANSCODE_TIMEOUT_SECS", 1800u64)?,
+                file_transfer_retry_min_delay_ms: parse(
+                    map,
+                    "FILE_TRANSFER_RETRY_MIN_DELAY_MS",
+                    500u64,
+                )?,
+                file_transfer_retry_max_delay_ms: parse(
+                    map,
+                    "FILE_TRANSFER_RETRY_MAX_DELAY_MS",
+                    10000u64,
+                )?,
+                file_transfer_retry_max_times: parse(map, "FILE_TRANSFER_RETRY_MAX_TIMES", 5usize)?,
+                circuit_breaker_failure_threshold: parse(
+                    map,
+                    "CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+                    5u32,
+                )?,
+                circuit_breaker_min_recovery_secs: parse(
+                    map,
+                    "CIRCUIT_BREAKER_MIN_RECOVERY_SECS",
+                    10u64,
+                )?,
+                circuit_breaker_max_recovery_secs: parse(
+                    map,
+                    "CIRCUIT_BREAKER_MAX_RECOVERY_SECS",
+                    60u64,
+                )?,
             },
             server: ServerConfig {
                 host: parse(map, "SERVER_HOST", IpAddr::V4(Ipv4Addr::UNSPECIFIED))?,

@@ -355,6 +355,9 @@ mod tests {
             file_transfer_retry_min_delay_ms: 50,
             file_transfer_retry_max_delay_ms: 100,
             file_transfer_retry_max_times: 3,
+            circuit_breaker_failure_threshold: 5,
+            circuit_breaker_min_recovery_secs: 10,
+            circuit_breaker_max_recovery_secs: 60,
         }
     }
 

@@ -1,5 +1,11 @@
 mod processor;
 
+use failsafe::{
+    StateMachine,
+    backoff::Exponential,
+    failure_policy::{ConsecutiveFailures, consecutive_failures},
+    futures::CircuitBreaker,
+};
 pub use processor::VideoProcessor;
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
@@ -8,8 +14,9 @@ use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use crate::{
-    domain::UploadContentTypeError, file_transfer::FileTransferError, media_probe::FfprobeError,
-    media_transcoder::TranscoderError, repository::VideoRepository, storage::R2StorageError,
+    config::WorkerConfig, domain::UploadContentTypeError, file_transfer::FileTransferError,
+    media_probe::FfprobeError, media_transcoder::TranscoderError, repository::VideoRepository,
+    storage::R2StorageError,
 };
 
 /// Errors that can occur during worker operations, including video processing and cleanup tasks.
@@ -49,6 +56,9 @@ pub enum WorkerError {
     TokioJoin(#[from] tokio::task::JoinError),
 }
 
+// Type alias for the specific failsafe state machine we are using
+type WorkerCircuitBreaker = StateMachine<ConsecutiveFailures<Exponential>, ()>;
+
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.
 pub struct Worker {
     /// Receiver for video processing jobs sent from the API when uploads are completed.
@@ -57,29 +67,39 @@ pub struct Worker {
     processor: VideoProcessor,
     /// Semaphore to limit concurrent processing jobs and prevent resource exhaustion.
     semaphore: Arc<Semaphore>,
+    /// Circuit breaker to protect infrastructure from cascading failures.
+    circuit_breaker: Arc<WorkerCircuitBreaker>,
 }
 
 impl Worker {
-    pub fn new(
-        rx: mpsc::Receiver<Ulid>,
-        processor: VideoProcessor,
-        max_concurrent_jobs: usize,
-    ) -> Self {
+    pub fn new(rx: mpsc::Receiver<Ulid>, processor: VideoProcessor, config: WorkerConfig) -> Self {
+        // Configure the Circuit Breaker:
+        // Use values from config for failure threshold and recovery delays.
+        let backoff = failsafe::backoff::exponential(
+            Duration::from_secs(config.circuit_breaker_min_recovery_secs),
+            Duration::from_secs(config.circuit_breaker_max_recovery_secs),
+        );
+        let policy = consecutive_failures(config.circuit_breaker_failure_threshold, backoff);
+
+        let circuit_breaker = Arc::new(failsafe::Config::new().failure_policy(policy).build());
+
         Self {
             rx,
             processor,
-            semaphore: Arc::new(Semaphore::new(max_concurrent_jobs)),
+            semaphore: Arc::new(Semaphore::new(config.max_concurrent_transcodes)),
+            circuit_breaker,
         }
     }
 
     /// Main loop for processing video jobs received from the API.
     pub async fn run_worker_loop(&mut self, shutdown_token: CancellationToken) {
         tracing::info!("worker loop started");
+        let mut active_jobs = tokio::task::JoinSet::new();
 
         loop {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {
-                    tracing::info!("worker loop received shutdown signal");
+                    tracing::info!("Worker received cancellation. Waiting for active jobs to finish...");
                     break;
                 }
                 job = self.rx.recv() => {
@@ -90,15 +110,46 @@ impl Worker {
 
                     let permit = self.semaphore.clone().acquire_owned().await.unwrap();
                     let processor = self.processor.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = processor.process(ulid).await {
-                            tracing::error!(%ulid, error = %e, "failed to process video");
+                    let breaker = self.circuit_breaker.clone();
+
+                    active_jobs.spawn(async move {
+                        let _permit = permit;
+
+                        // Wrap the entire processing pipeline in the circuit breaker
+                        let result = breaker.call(async {
+                            processor.process(ulid).await
+                        }).await;
+
+                        match result {
+                            Ok(_) => {
+                                tracing::info!(%ulid, "Job completed successfully");
+                            }
+                            Err(failsafe::Error::Rejected) => {
+                                // The breaker is OPEN. R2 or Postgres is likely down.
+                                tracing::error!(%ulid, "Circuit breaker OPEN: Job rejected to protect infrastructure");
+
+                                // TODO: consider implementing a retry mechanism here
+                            }
+                            Err(failsafe::Error::Inner(e)) => {
+                                // The job ran, but failed (e.g., FFmpeg crashed, or out of retries).
+                                // The breaker records this failure.
+                                tracing::error!(%ulid, error = %e, "Job failed");
+
+                                // TODO: consider additional error handling or alerting here for failed jobs
+                            }
                         }
-                        drop(permit);
                     });
+                }
+                Some(res) = active_jobs.join_next() => {
+                    if let Err(e) = res {
+                        tracing::error!("Worker task panicked: {}", e);
+                    }
                 }
             }
         }
+
+        while active_jobs.join_next().await.is_some() {}
+        tracing::info!("worker loop shut down gracefully");
     }
 
     /// Background task to sweep and fail zombie jobs and clean up stale pending uploads.
