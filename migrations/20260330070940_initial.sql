@@ -2,7 +2,6 @@ CREATE TABLE videos (
     id                  BIGSERIAL PRIMARY KEY,
     ulid                TEXT NOT NULL UNIQUE,
     status              TEXT NOT NULL DEFAULT 'pending_upload',
-                        -- pending_upload | uploaded | transmuxing | transcoding | ready | failed
     raw_key             TEXT NOT NULL,
     raw_expires_at      TIMESTAMPTZ,
     raw_archived_at     TIMESTAMPTZ,
@@ -17,4 +16,17 @@ CREATE TABLE videos (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX videos_status_idx ON videos (status);
+-- 1. Index for the Worker queue puller (only active uploads)
+CREATE INDEX idx_videos_queue ON videos (created_at) 
+WHERE status = 'uploaded';
+
+-- 2. Index for the Zombie Sweeper (only active transcodes)
+CREATE INDEX idx_videos_zombie_sweep ON videos (updated_at) 
+WHERE status IN ('transmuxing', 'transcoding');
+
+-- 3. Index for the Stale Upload Sweeper (only pending uploads)
+CREATE INDEX idx_videos_stale_uploads ON videos (created_at) 
+WHERE status = 'pending_upload';
+
+-- Note: We do NOT index 'ready' or 'failed' statuses. 
+-- The `UNIQUE (ulid)` constraint automatically creates the B-Tree index needed for API lookups.
