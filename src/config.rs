@@ -24,45 +24,68 @@ pub struct Config {
     pub storage: StorageConfig,
 }
 
-// TODO: break it down
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     /// Maximum number of videos that can be transcoded in parallel.
     pub max_concurrent_transcodes: usize,
-    /// Root directory for the worker to store temporary files during processing.
-    pub temp_dir: PathBuf,
-    /// Number of segments to upload in parallel when uploading HLS outputs to storage.
-    pub segment_upload_concurrency: usize,
-    /// Interval in seconds at which the worker sends heartbeat logs during transcoding to indicate progress.
-    pub transcode_heartbeat_interval_secs: u64,
-    /// Duration in seconds after which pending uploads are considered "zombies" and eligible for cleanup.
-    pub zombie_timeout_secs: u64,
-    /// Interval in seconds at which the zombie sweeper runs.
-    pub zombie_sweep_interval_secs: u64,
     /// Buffer size for the channel used to communicate upload completion events to the worker.
     pub worker_channel_buffer_size: usize,
-    /// Timeout in seconds for establishing a connection during file transfers.
-    pub http_connect_timeout_secs: u64,
-    /// Timeout in seconds for reading a chunk of data during file transfers.
-    pub http_read_timeout_secs: u64,
+    /// Delay in seconds before requeuing a job that was rejected by the circuit breaker.
+    pub job_requeue_delay_secs: u64,
+    /// Configuration for the circuit breaker.
+    pub circuit_breaker: CircuitBreakerConfig,
+    /// Configuration for the cleanup job.
+    pub cleanup: CleanupConfig,
+    /// Configuration for the video processor.
+    pub processor: ProcessorConfig,
+    /// Configuration for file transfers.
+    pub file_transfer: FileTransferConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerConfig {
+    /// Number of consecutive failures before the breaker opens.
+    pub failure_threshold: u32,
+    /// Minimum recovery delay in seconds.
+    pub min_recovery_secs: u64,
+    /// Maximum recovery delay in seconds.
+    pub max_recovery_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CleanupConfig {
+    /// Duration in seconds after which pending uploads are considered "zombies".
+    pub timeout_secs: u64,
+    /// Interval in seconds at which the cleanup job runs.
+    pub sweep_interval_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessorConfig {
+    /// Root directory for temporary files.
+    pub temp_dir: PathBuf,
+    /// Number of segments to upload in parallel.
+    pub segment_upload_concurrency: usize,
+    /// Interval in seconds for heartbeat logs during transcoding.
+    pub transcode_heartbeat_interval_secs: u64,
     /// Timeout in seconds for the transmuxing process.
     pub transmux_timeout_secs: u64,
     /// Timeout in seconds for the HLS transcoding process.
     pub transcode_timeout_secs: u64,
-    /// Minimum delay for file transfer retries.
-    pub file_transfer_retry_min_delay_ms: u64,
-    /// Maximum delay for file transfer retries.
-    pub file_transfer_retry_max_delay_ms: u64,
-    /// Maximum number of retry attempts for file transfers.
-    pub file_transfer_retry_max_times: usize,
-    /// Number of consecutive failures before the worker circuit breaker opens.
-    pub circuit_breaker_failure_threshold: u32,
-    /// Minimum recovery delay in seconds for the circuit breaker.
-    pub circuit_breaker_min_recovery_secs: u64,
-    /// Maximum recovery delay in seconds for the circuit breaker.
-    pub circuit_breaker_max_recovery_secs: u64,
-    /// Delay in seconds before requeuing a job that was rejected by the circuit breaker.
-    pub job_requeue_delay_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileTransferConfig {
+    /// Timeout in seconds for establishing a connection.
+    pub connect_timeout_secs: u64,
+    /// Timeout in seconds for reading chunks.
+    pub read_timeout_secs: u64,
+    /// Minimum delay for retries.
+    pub retry_min_delay_ms: u64,
+    /// Maximum delay for retries.
+    pub retry_max_delay_ms: u64,
+    /// Maximum number of retry attempts.
+    pub retry_max_times: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -104,51 +127,39 @@ impl Config {
             public_cdn_domain: require(map, "PUBLIC_CDN_DOMAIN")?,
             worker: WorkerConfig {
                 max_concurrent_transcodes: parse(map, "MAX_CONCURRENT_TRANSCODES", 1usize)?,
-                temp_dir: parse(
-                    map,
-                    "WORKER_TEMP_DIR",
-                    std::env::temp_dir().join("video-worker"),
-                )?,
-                segment_upload_concurrency: parse(map, "SEGMENT_UPLOAD_CONCURRENCY", 5usize)?,
-                transcode_heartbeat_interval_secs: parse(
-                    map,
-                    "TRANSCODE_HEARTBEAT_INTERVAL_SECS",
-                    30u64,
-                )?,
-                zombie_timeout_secs: parse(map, "ZOMBIE_TIMEOUT_SECS", 7200u64)?,
-                zombie_sweep_interval_secs: parse(map, "ZOMBIE_SWEEP_INTERVAL_SECS", 3600u64)?,
                 worker_channel_buffer_size: parse(map, "WORKER_CHANNEL_BUFFER_SIZE", 100usize)?,
-                http_connect_timeout_secs: parse(map, "HTTP_CONNECT_TIMEOUT_SECS", 10u64)?,
-                http_read_timeout_secs: parse(map, "HTTP_READ_TIMEOUT_SECS", 30u64)?,
-                transmux_timeout_secs: parse(map, "TRANSMUX_TIMEOUT_SECS", 300u64)?,
-                transcode_timeout_secs: parse(map, "TRANSCODE_TIMEOUT_SECS", 1800u64)?,
-                file_transfer_retry_min_delay_ms: parse(
-                    map,
-                    "FILE_TRANSFER_RETRY_MIN_DELAY_MS",
-                    500u64,
-                )?,
-                file_transfer_retry_max_delay_ms: parse(
-                    map,
-                    "FILE_TRANSFER_RETRY_MAX_DELAY_MS",
-                    10000u64,
-                )?,
-                file_transfer_retry_max_times: parse(map, "FILE_TRANSFER_RETRY_MAX_TIMES", 5usize)?,
-                circuit_breaker_failure_threshold: parse(
-                    map,
-                    "CIRCUIT_BREAKER_FAILURE_THRESHOLD",
-                    5u32,
-                )?,
-                circuit_breaker_min_recovery_secs: parse(
-                    map,
-                    "CIRCUIT_BREAKER_MIN_RECOVERY_SECS",
-                    10u64,
-                )?,
-                circuit_breaker_max_recovery_secs: parse(
-                    map,
-                    "CIRCUIT_BREAKER_MAX_RECOVERY_SECS",
-                    60u64,
-                )?,
                 job_requeue_delay_secs: parse(map, "JOB_REQUEUE_DELAY_SECS", 5u64)?,
+                circuit_breaker: CircuitBreakerConfig {
+                    failure_threshold: parse(map, "CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5u32)?,
+                    min_recovery_secs: parse(map, "CIRCUIT_BREAKER_MIN_RECOVERY_SECS", 10u64)?,
+                    max_recovery_secs: parse(map, "CIRCUIT_BREAKER_MAX_RECOVERY_SECS", 60u64)?,
+                },
+                cleanup: CleanupConfig {
+                    timeout_secs: parse(map, "CLEANUP_TIMEOUT_SECS", 7200u64)?,
+                    sweep_interval_secs: parse(map, "CLEANUP_SWEEP_INTERVAL_SECS", 3600u64)?,
+                },
+                processor: ProcessorConfig {
+                    temp_dir: parse(
+                        map,
+                        "WORKER_TEMP_DIR",
+                        std::env::temp_dir().join("video-worker"),
+                    )?,
+                    segment_upload_concurrency: parse(map, "SEGMENT_UPLOAD_CONCURRENCY", 5usize)?,
+                    transcode_heartbeat_interval_secs: parse(
+                        map,
+                        "TRANSCODE_HEARTBEAT_INTERVAL_SECS",
+                        30u64,
+                    )?,
+                    transmux_timeout_secs: parse(map, "TRANSMUX_TIMEOUT_SECS", 300u64)?,
+                    transcode_timeout_secs: parse(map, "TRANSCODE_TIMEOUT_SECS", 1800u64)?,
+                },
+                file_transfer: FileTransferConfig {
+                    connect_timeout_secs: parse(map, "HTTP_CONNECT_TIMEOUT_SECS", 10u64)?,
+                    read_timeout_secs: parse(map, "HTTP_READ_TIMEOUT_SECS", 30u64)?,
+                    retry_min_delay_ms: parse(map, "FILE_TRANSFER_RETRY_MIN_DELAY_MS", 500u64)?,
+                    retry_max_delay_ms: parse(map, "FILE_TRANSFER_RETRY_MAX_DELAY_MS", 10000u64)?,
+                    retry_max_times: parse(map, "FILE_TRANSFER_RETRY_MAX_TIMES", 5usize)?,
+                },
             },
             server: ServerConfig {
                 host: parse(map, "SERVER_HOST", IpAddr::V4(Ipv4Addr::UNSPECIFIED))?,

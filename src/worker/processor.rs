@@ -5,7 +5,7 @@ use ulid::Ulid;
 
 use super::WorkerError;
 use crate::{
-    config::WorkerConfig,
+    config::ProcessorConfig,
     domain::{HLSKey, ManifestKey, TransmuxKey, UploadContentType, VideoStatus},
     file_transfer::FileTransfer,
     media_probe::MediaProbe,
@@ -22,7 +22,7 @@ pub struct VideoProcessor {
     media_probe: Arc<dyn MediaProbe>,
     transcoder: Arc<dyn MediaTranscoder>,
     file_transfer: Arc<dyn FileTransfer>,
-    config: WorkerConfig,
+    config: ProcessorConfig,
 }
 
 impl VideoProcessor {
@@ -32,7 +32,7 @@ impl VideoProcessor {
         media_probe: Arc<dyn MediaProbe>,
         transcoder: Arc<dyn MediaTranscoder>,
         file_transfer: Arc<dyn FileTransfer>,
-        config: WorkerConfig,
+        config: ProcessorConfig,
     ) -> Self {
         Self {
             file_transfer,
@@ -310,6 +310,7 @@ impl VideoProcessor {
 mod tests {
     use super::*;
     use crate::{
+        config::ProcessorConfig,
         domain::{AudioCodec, ContainerFormat, MediaMetadata, VideoCodec},
         file_transfer::{FileTransferError, port::MockFileTransfer},
         media_probe::port::MockMediaProbe,
@@ -326,26 +327,13 @@ mod tests {
         Url::parse("https://example.com/dummy").unwrap()
     }
 
-    fn dummy_worker_config() -> WorkerConfig {
-        WorkerConfig {
-            max_concurrent_transcodes: 1.try_into().unwrap(),
+    fn dummy_processor_config() -> ProcessorConfig {
+        ProcessorConfig {
             temp_dir: std::env::temp_dir(),
             segment_upload_concurrency: 4,
             transcode_heartbeat_interval_secs: 30.try_into().unwrap(),
-            zombie_timeout_secs: 7200.try_into().unwrap(),
-            zombie_sweep_interval_secs: 3600.try_into().unwrap(),
-            worker_channel_buffer_size: 100,
-            http_connect_timeout_secs: 10,
-            http_read_timeout_secs: 30,
             transmux_timeout_secs: 300,
             transcode_timeout_secs: 1800,
-            file_transfer_retry_min_delay_ms: 50,
-            file_transfer_retry_max_delay_ms: 100,
-            file_transfer_retry_max_times: 3,
-            circuit_breaker_failure_threshold: 5,
-            circuit_breaker_min_recovery_secs: 10,
-            circuit_breaker_max_recovery_secs: 60,
-            job_requeue_delay_secs: 5,
         }
     }
 
@@ -366,7 +354,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(MockFileTransfer::new()),
-            dummy_worker_config(),
+            dummy_processor_config(),
         );
 
         let result = processor.process(ulid).await;
@@ -471,7 +459,7 @@ mod tests {
             Arc::new(probe),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            dummy_worker_config(),
+            dummy_processor_config(),
         );
 
         let result = processor.run_transmux(ulid, &record).await;
@@ -537,7 +525,7 @@ mod tests {
             Arc::new(probe),
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(file_transfer),
-            dummy_worker_config(),
+            dummy_processor_config(),
         );
 
         let result = processor.process(ulid).await;
@@ -658,7 +646,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            dummy_worker_config(),
+            dummy_processor_config(),
         );
 
         let result = processor
@@ -718,7 +706,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(transcoder),
             Arc::new(file_transfer),
-            dummy_worker_config(),
+            dummy_processor_config(),
         );
 
         let record = VideoRecordBuilder::new(ulid).build();
@@ -767,7 +755,7 @@ mod tests {
             Arc::new(MockMediaProbe::new()),
             Arc::new(MockMediaTranscoder::new()),
             Arc::new(file_transfer),
-            dummy_worker_config(),
+            dummy_processor_config(),
         );
 
         let result = processor.upload_segments(ulid, &hls_dir).await;

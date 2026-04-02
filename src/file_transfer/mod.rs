@@ -9,7 +9,7 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
-use crate::{config::WorkerConfig, domain::UploadContentType};
+use crate::{config::FileTransferConfig, domain::UploadContentType};
 
 #[derive(Debug, Error)]
 pub enum FileTransferError {
@@ -31,16 +31,12 @@ fn it_retrieable_error(e: &FileTransferError) -> bool {
 }
 
 impl HttpFileTransfer {
-    pub fn new(client: reqwest::Client, config: WorkerConfig) -> Self {
+    pub fn new(client: reqwest::Client, config: FileTransferConfig) -> Self {
         // Configure the retry policy based on worker config parameters
         let retry_policy = ExponentialBuilder::default()
-            .with_min_delay(Duration::from_millis(
-                config.file_transfer_retry_min_delay_ms,
-            ))
-            .with_max_delay(Duration::from_millis(
-                config.file_transfer_retry_max_delay_ms,
-            ))
-            .with_max_times(config.file_transfer_retry_max_times)
+            .with_min_delay(Duration::from_millis(config.retry_min_delay_ms))
+            .with_max_delay(Duration::from_millis(config.retry_max_delay_ms))
+            .with_max_times(config.retry_max_times)
             .with_jitter();
 
         Self {
@@ -129,7 +125,6 @@ impl FileTransfer for HttpFileTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use crate::domain::UploadContentType;
     use std::io::Write;
     use std::str::FromStr;
@@ -138,12 +133,14 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn test_config() -> WorkerConfig {
-        let mut config = Config::test().worker;
-        config.file_transfer_retry_min_delay_ms = 1;
-        config.file_transfer_retry_max_delay_ms = 10;
-        config.file_transfer_retry_max_times = 5; // allow enough retries
-        config
+    fn test_config() -> FileTransferConfig {
+        FileTransferConfig {
+            retry_min_delay_ms: 1,
+            retry_max_delay_ms: 10,
+            retry_max_times: 5,
+            connect_timeout_secs: 1,
+            read_timeout_secs: 1,
+        }
     }
 
     #[tokio::test]
@@ -239,7 +236,7 @@ mod tests {
             .unwrap();
 
         let mut config = test_config();
-        config.file_transfer_retry_max_times = 2; // Fail fast
+        config.retry_max_times = 2; // Fail fast
 
         let ft = HttpFileTransfer::new(client, config);
         let dest = NamedTempFile::new().unwrap();
@@ -303,7 +300,7 @@ mod tests {
             .unwrap();
 
         let mut config = test_config();
-        config.file_transfer_retry_max_times = 2;
+        config.retry_max_times = 2; // Fail fast
 
         let ft = HttpFileTransfer::new(client, config);
         let file = NamedTempFile::new().unwrap();

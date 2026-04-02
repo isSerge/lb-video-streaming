@@ -73,8 +73,8 @@ pub struct Worker {
     semaphore: Arc<Semaphore>,
     /// Circuit breaker to protect infrastructure from cascading failures.
     circuit_breaker: Arc<WorkerCircuitBreaker>,
-    /// Configuration for the worker.
-    config: WorkerConfig,
+    /// Delay in seconds before requeuing a job after a failure.
+    job_requeue_delay_secs: u64,
 }
 
 impl Worker {
@@ -87,11 +87,11 @@ impl Worker {
     ) -> Self {
         // Configure the Circuit Breaker with a policy of tripping after a certain number of consecutive failures
         let backoff = failsafe::backoff::exponential(
-            Duration::from_secs(config.circuit_breaker_min_recovery_secs),
-            Duration::from_secs(config.circuit_breaker_max_recovery_secs),
+            Duration::from_secs(config.circuit_breaker.min_recovery_secs),
+            Duration::from_secs(config.circuit_breaker.max_recovery_secs),
         );
         let policy =
-            failure_policy::consecutive_failures(config.circuit_breaker_failure_threshold, backoff);
+            failure_policy::consecutive_failures(config.circuit_breaker.failure_threshold, backoff);
 
         let circuit_breaker = Arc::new(failsafe::Config::new().failure_policy(policy).build());
 
@@ -102,7 +102,7 @@ impl Worker {
             repository,
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_transcodes)),
             circuit_breaker,
-            config,
+            job_requeue_delay_secs: config.job_requeue_delay_secs,
         }
     }
 
@@ -128,7 +128,7 @@ impl Worker {
                     let processor = self.processor.clone();
                     let breaker = self.circuit_breaker.clone();
                     let tx_requeue = tx.clone();
-                    let requeue_delay = self.config.job_requeue_delay_secs;
+                    let requeue_delay = self.job_requeue_delay_secs;
                     let repository = Arc::clone(&self.repository);
 
                     active_jobs.spawn(async move {

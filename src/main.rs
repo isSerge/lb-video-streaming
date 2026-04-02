@@ -42,7 +42,7 @@ async fn main() -> Result<(), AppError> {
     let config = Config::from_env()?;
 
     // Ensure the worker temp directory exists before starting the application
-    let temp_root = config.worker.temp_dir.clone();
+    let temp_root = config.worker.processor.temp_dir.clone();
     std::fs::create_dir_all(&temp_root).map_err(AppError::Io)?;
 
     tracing_subscriber::fmt()
@@ -81,12 +81,18 @@ async fn main() -> Result<(), AppError> {
 
     // connect_timeout and a read_timeout apply to gaps between chunks
     let http_client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(config.worker.http_connect_timeout_secs))
-        .read_timeout(Duration::from_secs(config.worker.http_read_timeout_secs))
+        .connect_timeout(Duration::from_secs(
+            config.worker.file_transfer.connect_timeout_secs,
+        ))
+        .read_timeout(Duration::from_secs(
+            config.worker.file_transfer.read_timeout_secs,
+        ))
         .build()?;
 
-    let file_transfer: Arc<dyn FileTransfer> =
-        Arc::new(HttpFileTransfer::new(http_client, config.worker.clone()));
+    let file_transfer: Arc<dyn FileTransfer> = Arc::new(HttpFileTransfer::new(
+        http_client,
+        config.worker.file_transfer.clone(),
+    ));
 
     // Create a channel for communicating upload completion events to the worker.
     let (worker_tx, worker_rx) =
@@ -99,7 +105,7 @@ async fn main() -> Result<(), AppError> {
         Arc::clone(&media_probe),
         Arc::clone(&media_transcoder),
         Arc::clone(&file_transfer),
-        config.worker.clone(),
+        config.worker.processor.clone(),
     );
     let mut worker = Worker::new(
         worker_rx,
@@ -118,8 +124,8 @@ async fn main() -> Result<(), AppError> {
     let cleanup_handle = tokio::spawn(async move {
         Worker::run_cleanup(
             worker_video_repo_clone,
-            Duration::from_secs(config.worker.zombie_timeout_secs),
-            Duration::from_secs(config.worker.zombie_sweep_interval_secs),
+            Duration::from_secs(config.worker.cleanup.timeout_secs),
+            Duration::from_secs(config.worker.cleanup.sweep_interval_secs),
             Duration::from_secs(config.storage.pending_upload_ttl_secs),
             cleanup_token_clone,
         )
