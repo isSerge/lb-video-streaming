@@ -19,7 +19,7 @@ use crate::{
     media_probe::{FfprobeError, port::MockMediaProbe},
     repository::port::MockVideoRepository,
     shared::video_test_utils::VideoRecordBuilder,
-    storage::port::MockStorage,
+    storage::{R2StorageError, port::MockStorage},
 };
 
 fn test_config() -> Arc<Config> {
@@ -81,6 +81,105 @@ async fn create_upload_url_returns_upload_session() {
     let body = response_json(response).await;
     assert!(body["ulid"].is_string());
     assert_eq!(body["upload_url"], "https://r2.example.com/upload/key");
+}
+
+#[tokio::test]
+async fn create_upload_url_returns_400_for_invalid_content_type() {
+    let response = build_app(
+        MockVideoRepository::new(),
+        MockStorage::new(),
+        MockMediaProbe::new(),
+    )
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/upload-url")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"content_type":"not-a-mime","size_bytes":1000}"#,
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn create_upload_url_returns_400_when_size_exceeds_max() {
+    let response = build_app(
+        MockVideoRepository::new(),
+        MockStorage::new(),
+        MockMediaProbe::new(),
+    )
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/upload-url")
+            .header("content-type", "application/json")
+            // Config default max is 1GB, this is 2GB
+            .body(Body::from(
+                r#"{"content_type":"video/mp4","size_bytes":2000000000}"#,
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_upload_url_returns_500_when_storage_presign_fails() {
+    let mut repo = MockVideoRepository::new();
+    repo.expect_create_pending_video()
+        .once()
+        .returning(|_, _, _, _| Ok(()));
+
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_upload_url()
+        .once()
+        .returning(|_, _| Err(R2StorageError::Presign("simulated error".into())));
+
+    let response = build_app(repo, storage, MockMediaProbe::new())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/upload-url")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"size_bytes":1000}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn create_upload_url_returns_500_when_repo_insert_fails() {
+    let mut repo = MockVideoRepository::new();
+    repo.expect_create_pending_video()
+        .once()
+        .returning(|_, _, _, _| {
+            Err(sqlx::Error::RowNotFound) // simulated DB error
+        });
+
+    let response = build_app(repo, MockStorage::new(), MockMediaProbe::new())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/upload-url")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"size_bytes":1000}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 // ── POST /api/upload-complete/{ulid} ─────────────────────────────────────────
@@ -305,6 +404,152 @@ async fn mark_upload_complete_pushes_ulid_to_worker_channel() {
     assert_eq!(received_ulid, ulid);
 }
 
+#[tokio::test]
+async fn mark_upload_complete_sets_transmux_required_for_h264_in_mkv() {
+    let ulid = Ulid::new();
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid()
+        .once()
+        .returning(move |_| Ok(Some(VideoRecordBuilder::new(ulid).build())));
+
+    // The matrix must evaluate MKV + H264 + AAC as TransmuxRequired
+    repo.expect_mark_uploaded_with_compatibility()
+        .once()
+        .withf(|_, compat| *compat == FormatCompatibility::TransmuxRequired)
+        .returning(|_, _| Ok(true));
+
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_download_url()
+        .once()
+        .returning(|_| Ok(Url::parse("https://r2").unwrap()));
+
+    let mut probe = MockMediaProbe::new();
+    probe.expect_probe_url().once().returning(|_| {
+        Ok(MediaMetadata {
+            container_format: Some(ContainerFormat::Matroska),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: Some(AudioCodec::Aac),
+        })
+    });
+
+    let response = build_app(repo, storage, probe)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/upload-complete/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn mark_upload_complete_returns_404_when_mark_returns_false() {
+    let ulid = Ulid::new();
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid()
+        .once()
+        .returning(move |_| Ok(Some(VideoRecordBuilder::new(ulid).build())));
+    // Simulate row concurrently deleted between find and update
+    repo.expect_mark_uploaded_with_compatibility()
+        .once()
+        .returning(|_, _| Ok(false));
+
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_download_url()
+        .once()
+        .returning(|_| Ok(Url::parse("https://r2").unwrap()));
+
+    let mut probe = MockMediaProbe::new();
+    probe.expect_probe_url().once().returning(|_| {
+        Ok(MediaMetadata {
+            container_format: Some(ContainerFormat::Mp4),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: Some(AudioCodec::Aac),
+        })
+    });
+
+    let response = build_app(repo, storage, probe)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/upload-complete/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn mark_upload_complete_returns_500_when_repo_find_fails() {
+    let ulid = Ulid::new();
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid()
+        .once()
+        .returning(|_| Err(sqlx::Error::RowNotFound));
+
+    let response = build_app(repo, MockStorage::new(), MockMediaProbe::new())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/upload-complete/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn mark_upload_complete_returns_500_when_repo_update_fails() {
+    let ulid = Ulid::new();
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid()
+        .once()
+        .returning(move |_| Ok(Some(VideoRecordBuilder::new(ulid).build())));
+    repo.expect_mark_uploaded_with_compatibility()
+        .once()
+        .returning(|_, _| Err(sqlx::Error::RowNotFound));
+
+    let mut storage = MockStorage::new();
+    storage
+        .expect_create_download_url()
+        .once()
+        .returning(|_| Ok(Url::parse("https://r2").unwrap()));
+
+    let mut probe = MockMediaProbe::new();
+    probe.expect_probe_url().once().returning(|_| {
+        Ok(MediaMetadata {
+            container_format: Some(ContainerFormat::Mp4),
+            video_codec: Some(VideoCodec::H264),
+            audio_codec: Some(AudioCodec::Aac),
+        })
+    });
+
+    let response = build_app(repo, storage, probe)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/upload-complete/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 // ── GET /api/video/{ulid} ────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -361,78 +606,84 @@ async fn get_video_metadata_returns_404_when_video_not_found() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-// ── TODO: upload-url ─────────────────────────────────────────────────────────
-
 #[tokio::test]
-#[ignore = "todo"]
-async fn create_upload_url_returns_400_for_invalid_content_type() {
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "todo"]
-async fn create_upload_url_returns_400_when_size_exceeds_max() {
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "todo"]
-async fn create_upload_url_returns_500_when_storage_presign_fails() {
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "todo"]
-async fn create_upload_url_returns_500_when_repo_insert_fails() {
-    todo!()
-}
-
-// ── TODO: upload-complete ─────────────────────────────────────────────────────
-
-#[tokio::test]
-#[ignore = "todo"]
-async fn mark_upload_complete_sets_transmux_required_for_h264_in_mkv() {
-    // Matroska container + H264 video + AAC audio → TransmuxRequired
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "todo"]
-async fn mark_upload_complete_returns_404_when_mark_returns_false() {
-    // find_video_by_ulid returns Some, but mark_uploaded_with_compatibility
-    // returns false (row was concurrently deleted between the two calls)
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "todo"]
-async fn mark_upload_complete_returns_500_when_repo_find_fails() {
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "todo"]
-async fn mark_upload_complete_returns_500_when_repo_update_fails() {
-    todo!()
-}
-
-// ── TODO: video metadata ───────────────────────────────────────────────────────
-
-#[tokio::test]
-#[ignore = "todo"]
 async fn get_video_metadata_raw_url_uses_cdn_domain() {
-    // raw_url in response must be prefixed with PUBLIC_CDN_DOMAIN from config
-    todo!()
+    let ulid = Ulid::new();
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid()
+        .once()
+        .returning(move |_| Ok(Some(VideoRecordBuilder::new(ulid).build())));
+
+    let response = build_app(repo, MockStorage::new(), MockMediaProbe::new())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&format!("/api/video/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = response_json(response).await;
+    // test_config() uses https://cdn.example.com
+    assert_eq!(
+        body["raw_url"].as_str().unwrap(),
+        format!("https://cdn.example.com/raw/{}/video", ulid)
+    );
 }
 
 #[tokio::test]
-#[ignore = "todo"]
 async fn get_video_metadata_includes_transmux_url_when_key_is_set() {
-    todo!()
+    let ulid = Ulid::new();
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid().once().returning(move |_| {
+        Ok(Some(
+            VideoRecordBuilder::new(ulid)
+                .transmux_key(Some(crate::domain::TransmuxKey::new(
+                    ulid,
+                    ContainerFormat::Mp4,
+                )))
+                .build(),
+        ))
+    });
+
+    let response = build_app(repo, MockStorage::new(), MockMediaProbe::new())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&format!("/api/video/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = response_json(response).await;
+    assert_eq!(
+        body["transmux_url"].as_str().unwrap(),
+        format!("https://cdn.example.com/transmux/{}/output.mp4", ulid)
+    );
 }
 
 #[tokio::test]
-#[ignore = "todo"]
 async fn get_video_metadata_returns_500_when_repo_fails() {
-    todo!()
+    let ulid = Ulid::new();
+    let mut repo = MockVideoRepository::new();
+    repo.expect_find_video_by_ulid()
+        .once()
+        .returning(|_| Err(sqlx::Error::RowNotFound));
+
+    let response = build_app(repo, MockStorage::new(), MockMediaProbe::new())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&format!("/api/video/{ulid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

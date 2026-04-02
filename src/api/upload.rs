@@ -99,8 +99,8 @@ pub async fn mark_upload_complete(
         return Err(ApiError::NotFound);
     }
 
-    // Push Ulid to the worker queue for processing
-    // TODO: double check if this is reliable enough
+    // Push Ulid to the worker queue for processing.
+    // If fails to enqueue, we log the error but do not return an error response since the upload is already marked as complete and it will be picked up by the worker eventually.
     if let Err(e) = state.worker_tx.send(ulid).await {
         tracing::error!(%ulid, error = %e, "failed to queue transcode job");
     }
