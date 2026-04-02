@@ -65,4 +65,7 @@ pub trait VideoRepository: Send + Sync {
 
     /// Clear the transmux key for a video, used by the worker to clean up the database after a successful upload of the processed video to R2.
     async fn clear_transmux_key(&self, ulid: Ulid) -> Result<(), sqlx::Error>;
+
+    /// Check the database connection health.
+    async fn ping(&self) -> Result<(), sqlx::Error>;
 }

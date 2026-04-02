@@ -1,7 +1,9 @@
 //! Health endpoint handlers.
 
-use axum::Json;
+use axum::{Json, extract::State};
 use serde::Serialize;
+
+use super::state::AppState;
 
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
@@ -11,18 +13,27 @@ pub struct HealthResponse {
 
 #[derive(Debug, Serialize)]
 struct HealthChecks {
-    // TODO: wire real DB ping and R2 check once state is injected into router.
     database: &'static str,
     r2_storage: &'static str,
 }
 
 /// Lightweight process health endpoint.
-pub async fn health() -> Json<HealthResponse> {
+pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
+    let (db_res, r2_res) = tokio::join!(state.video_repository.ping(), state.storage.ping());
+
+    let database = db_res.map_or("error", |_| "ok");
+    let r2_storage = r2_res.map_or("error", |_| "ok");
+    let status = if database == "ok" && r2_storage == "ok" {
+        "ok"
+    } else {
+        "error"
+    };
+
     Json(HealthResponse {
-        status: "ok",
+        status,
         checks: HealthChecks {
-            database: "todo",
-            r2_storage: "todo",
+            database,
+            r2_storage,
         },
     })
 }

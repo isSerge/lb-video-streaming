@@ -160,4 +160,15 @@ impl Storage for R2Storage {
 
         Ok(())
     }
+
+    async fn ping(&self) -> Result<(), R2StorageError> {
+        self.client
+            .head_bucket()
+            .bucket(&self.bucket_name)
+            .send()
+            .await
+            .map_err(|e| R2StorageError::Internal(e.to_string()))?;
+
+        Ok(())
+    }
 }

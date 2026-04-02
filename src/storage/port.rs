@@ -46,4 +46,7 @@ pub trait Storage: Send + Sync {
 
     /// Delete an object by key, used for cleanup after processing.
     async fn delete_object(&self, key: &str) -> Result<(), R2StorageError>;
+
+    /// Check the storage connectivity health.
+    async fn ping(&self) -> Result<(), R2StorageError>;
 }
