@@ -225,3 +225,100 @@ impl Worker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::WorkerConfig, file_transfer::port::MockFileTransfer,
+        media_probe::port::MockMediaProbe, media_transcoder::port::MockMediaTranscoder,
+        repository::port::MockVideoRepository, storage::port::MockStorage,
+    };
+    use mockall::predicate::*;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    fn dummy_worker_config() -> WorkerConfig {
+        crate::config::Config::test().worker
+    }
+
+    #[tokio::test]
+    async fn worker_loop_shuts_down_on_cancellation() {
+        let (_rx_tx, rx) = mpsc::channel(1);
+        let (tx, _rx_dummy) = mpsc::channel(1);
+        let repo = Arc::new(MockVideoRepository::new());
+
+        let processor = VideoProcessor::new(
+            repo.clone(),
+            Arc::new(MockStorage::new()),
+            Arc::new(MockMediaProbe::new()),
+            Arc::new(MockMediaTranscoder::new()),
+            Arc::new(MockFileTransfer::new()),
+            dummy_worker_config().processor,
+        );
+
+        let mut worker = Worker::new(rx, tx, processor, repo, dummy_worker_config());
+
+        let cancel_token = CancellationToken::new();
+        let cancel_clone = cancel_token.clone();
+
+        // Immediately trigger cancellation
+        cancel_clone.cancel();
+
+        // The loop should exit immediately without hanging
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), worker.run_worker_loop(cancel_token))
+                .await;
+        assert!(
+            result.is_ok(),
+            "Worker loop did not shut down on cancellation"
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_loop_marks_job_failed_on_fatal_error() {
+        let ulid = Ulid::new();
+        let (rx_tx, rx) = mpsc::channel(1);
+        let (tx, _rx_dummy) = mpsc::channel(1);
+
+        let mut repo = MockVideoRepository::new();
+
+        // 1. Mock a fatal database error to simulate an unrecoverable failure during the process() call.
+        repo.expect_find_video_by_ulid()
+            .once()
+            .returning(|_| Err(sqlx::Error::RowNotFound));
+
+        // 2. The Worker loop MUST catch this and explicitly mark the job as Failed.
+        repo.expect_update_status()
+            .with(eq(ulid), eq(VideoStatus::Failed))
+            .once()
+            .returning(|_, _| Ok(()));
+
+        let repo_arc = Arc::new(repo);
+
+        let processor = VideoProcessor::new(
+            repo_arc.clone(),
+            Arc::new(MockStorage::new()),
+            Arc::new(MockMediaProbe::new()),
+            Arc::new(MockMediaTranscoder::new()),
+            Arc::new(MockFileTransfer::new()),
+            dummy_worker_config().processor,
+        );
+
+        let mut worker = Worker::new(rx, tx, processor, repo_arc, dummy_worker_config());
+
+        rx_tx.send(ulid).await.unwrap();
+
+        let cancel_token = CancellationToken::new();
+        let cancel_clone = cancel_token.clone();
+
+        tokio::spawn(async move {
+            // Give the worker time to process the job, then cancel the loop
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel_clone.cancel();
+        });
+
+        // Run the worker
+        worker.run_worker_loop(cancel_token).await;
+    }
+}
