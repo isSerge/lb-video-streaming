@@ -4,6 +4,7 @@ pub use processor::VideoProcessor;
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc};
+use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use crate::{
@@ -72,18 +73,31 @@ impl Worker {
     }
 
     /// Main loop for processing video jobs received from the API.
-    pub async fn run_worker_loop(&mut self) {
+    pub async fn run_worker_loop(&mut self, shutdown_token: CancellationToken) {
         tracing::info!("worker loop started");
 
-        while let Some(ulid) = self.rx.recv().await {
-            let permit = self.semaphore.clone().acquire_owned().await.unwrap();
-            let processor = self.processor.clone();
-            tokio::spawn(async move {
-                if let Err(e) = processor.process(ulid).await {
-                    tracing::error!(%ulid, error = %e, "failed to process video");
+        loop {
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    tracing::info!("worker loop received shutdown signal");
+                    break;
                 }
-                drop(permit);
-            });
+                job = self.rx.recv() => {
+                    let Some(ulid) = job else {
+                        tracing::info!("worker channel closed, shutting down");
+                        break;
+                    };
+
+                    let permit = self.semaphore.clone().acquire_owned().await.unwrap();
+                    let processor = self.processor.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = processor.process(ulid).await {
+                            tracing::error!(%ulid, error = %e, "failed to process video");
+                        }
+                        drop(permit);
+                    });
+                }
+            }
         }
     }
 
@@ -94,6 +108,7 @@ impl Worker {
         timeout: Duration,
         sweep_interval: Duration,
         pending_upload_ttl: Duration,
+        shutdown_token: CancellationToken,
     ) {
         tracing::info!(
             ?timeout,
@@ -104,27 +119,33 @@ impl Worker {
         let mut interval = tokio::time::interval(sweep_interval);
 
         loop {
-            interval.tick().await;
-
-            // 1. Mark stuck processing jobs as failed
-            match repository.mark_zombie_jobs_failed(timeout).await {
-                Ok(count) if count > 0 => {
-                    tracing::warn!(count, "swept zombie jobs to failed status")
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    tracing::info!("cleanup task received shutdown signal");
+                    break;
                 }
-                Err(e) => tracing::error!(error = %e, "failed to sweep zombie jobs"),
-                _ => {}
-            }
+                _ = interval.tick() => {
+                    // 1. Mark stuck processing jobs as failed
+                    match repository.mark_zombie_jobs_failed(timeout).await {
+                        Ok(count) if count > 0 => {
+                            tracing::warn!(count, "swept zombie jobs to failed status")
+                        }
+                        Err(e) => tracing::error!(error = %e, "failed to sweep zombie jobs"),
+                        _ => {}
+                    }
 
-            // 2. Delete stale pending_upload rows
-            match repository
-                .delete_stale_pending_uploads(pending_upload_ttl)
-                .await
-            {
-                Ok(count) if count > 0 => {
-                    tracing::info!(count, "deleted stale pending_upload rows")
+                    // 2. Delete stale pending_upload rows
+                    match repository
+                        .delete_stale_pending_uploads(pending_upload_ttl)
+                        .await
+                    {
+                        Ok(count) if count > 0 => {
+                            tracing::info!(count, "deleted stale pending_upload rows")
+                        }
+                        Err(e) => tracing::error!(error = %e, "failed to delete stale pending uploads"),
+                        _ => {}
+                    }
                 }
-                Err(e) => tracing::error!(error = %e, "failed to delete stale pending uploads"),
-                _ => {}
             }
         }
     }

@@ -15,6 +15,7 @@ use repository::{PgVideoRepository, VideoRepository};
 use std::{sync::Arc, time::Duration};
 use storage::{R2Storage, Storage};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 use worker::{VideoProcessor, Worker};
 
@@ -35,7 +36,6 @@ enum AppError {
     Request(#[from] reqwest::Error),
 }
 
-// TODO: add graceful shutdown
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     let config = Config::from_env()?;
@@ -61,6 +61,16 @@ async fn main() -> Result<(), AppError> {
     tracing::info!(bucket = %config.r2_bucket_name, "R2 storage client ready");
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
+
+    // Cancellation token to signal shutdown to worker tasks
+    let cancel_token = CancellationToken::new();
+
+    // Spawn a task to listen for shutdown signals and trigger graceful shutdown.
+    let shutdown_token = cancel_token.clone();
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        shutdown_token.cancel();
+    });
 
     // Initialize shared services and state for API handlers and worker tasks.
     let video_repository: Arc<dyn VideoRepository> = Arc::new(video_repository);
@@ -97,13 +107,18 @@ async fn main() -> Result<(), AppError> {
     );
     let worker_video_repo_clone = Arc::clone(&video_repository);
     // TODO: use handlers during graceful shutdown to ensure all tasks are properly stopped and no jobs are lost
-    let _worker_handle = tokio::spawn(async move { worker.run_worker_loop().await });
-    let _cleanup_handle = tokio::spawn(async move {
+    let worker_token_clone = cancel_token.clone();
+    let worker_handle =
+        tokio::spawn(async move { worker.run_worker_loop(worker_token_clone).await });
+
+    let cleanup_token_clone = cancel_token.clone();
+    let cleanup_handle = tokio::spawn(async move {
         Worker::run_cleanup(
             worker_video_repo_clone,
             Duration::from_secs(config.worker.zombie_timeout_secs),
             Duration::from_secs(config.worker.zombie_sweep_interval_secs),
             Duration::from_secs(config.storage.pending_upload_ttl_secs),
+            cleanup_token_clone,
         )
         .await
     });
@@ -127,7 +142,52 @@ async fn main() -> Result<(), AppError> {
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 
     tracing::info!(addr = %listener.local_addr()?, "server listening");
-    axum::serve(listener, app).await?;
+    let server_token_clone = cancel_token.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(server_token_clone.cancelled_owned())
+        .await?;
+
+    // AWAIT all background tasks
+    // TODO: consider adding timeouts to ensure shutdown is not blocked by a stuck task or long transcode
+    let (cleanup_result, worker_result) = tokio::join!(cleanup_handle, worker_handle);
+
+    if let Err(e) = cleanup_result {
+        tracing::error!("Cleanup task panicked: {}", e);
+    }
+    if let Err(e) = worker_result {
+        tracing::error!("Worker task panicked: {}", e);
+    }
+
+    tracing::info!("Graceful shutdown complete.");
 
     Ok(())
+}
+
+/// Wait for either a CTRL+C (SIGINT) or a SIGTERM signal.
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let sigterm = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let sigterm = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("Received Ctrl+C (SIGINT), initiating graceful shutdown...");
+        },
+        _ = sigterm => {
+            tracing::info!("Received SIGTERM, initiating graceful shutdown...");
+        },
+    }
 }
