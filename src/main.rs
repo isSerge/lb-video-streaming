@@ -128,11 +128,12 @@ async fn main() -> Result<(), AppError> {
         let _ = worker_tx.send(ulid).await;
     }
 
+    let config_arc = Arc::new(config);
     let state = api::AppState::new(
         video_repository,
         storage,
         media_probe,
-        Arc::new(config),
+        config_arc.clone(),
         worker_tx,
     );
     let app = api::router(state);
@@ -144,18 +145,31 @@ async fn main() -> Result<(), AppError> {
         .with_graceful_shutdown(server_token_clone.cancelled_owned())
         .await?;
 
-    // AWAIT all background tasks
-    // TODO: consider adding timeouts to ensure shutdown is not blocked by a stuck task or long transcode
-    let (cleanup_result, worker_result) = tokio::join!(cleanup_handle, worker_handle);
+    let bg_tasks = async {
+        let (cleanup_result, worker_result) = tokio::join!(cleanup_handle, worker_handle);
+        if let Err(e) = cleanup_result {
+            tracing::error!("Cleanup task panicked: {}", e);
+        }
+        if let Err(e) = worker_result {
+            tracing::error!("Worker task panicked: {}", e);
+        }
+    };
 
-    if let Err(e) = cleanup_result {
-        tracing::error!("Cleanup task panicked: {}", e);
-    }
-    if let Err(e) = worker_result {
-        tracing::error!("Worker task panicked: {}", e);
+    match tokio::time::timeout(
+        Duration::from_secs(config_arc.server.shutdown_timeout_secs),
+        bg_tasks,
+    )
+    .await
+    {
+        Ok(_) => {
+            tracing::info!("Graceful shutdown complete.");
+        }
+        Err(_) => {
+            tracing::warn!("Graceful shutdown timed out. Hard-killing remaining tasks. Jobs should be recovered on next startup");
+        }
     }
 
-    tracing::info!("Graceful shutdown complete.");
+    tracing::info!("application shutdown complete");
 
     Ok(())
 }

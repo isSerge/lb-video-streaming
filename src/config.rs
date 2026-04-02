@@ -70,6 +70,7 @@ pub struct ServerConfig {
     pub log_level: LogLevel,
     pub ui_origin: String,
     pub max_upload_bytes: u64,
+    pub shutdown_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +153,7 @@ impl Config {
                 log_level: parse(map, "LOG_LEVEL", LogLevel::Info)?,
                 ui_origin: opt(map, "UI_ORIGIN", "http://localhost:5173"),
                 max_upload_bytes: parse(map, "MAX_UPLOAD_BYTES", 1_073_741_824u64)?,
+                shutdown_timeout_secs: parse(map, "SHUTDOWN_TIMEOUT_SECS", 60u64)?,
             },
             storage: StorageConfig {
                 presigned_upload_ttl_secs: parse(map, "PRESIGNED_UPLOAD_TTL_SECS", 900u64)?,
