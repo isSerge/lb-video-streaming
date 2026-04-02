@@ -358,6 +358,7 @@ mod tests {
             circuit_breaker_failure_threshold: 5,
             circuit_breaker_min_recovery_secs: 10,
             circuit_breaker_max_recovery_secs: 60,
+            job_requeue_delay_secs: 5,
         }
     }
 

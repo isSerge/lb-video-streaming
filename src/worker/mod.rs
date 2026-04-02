@@ -1,11 +1,6 @@
 mod processor;
 
-use failsafe::{
-    StateMachine,
-    backoff::Exponential,
-    failure_policy::{ConsecutiveFailures, consecutive_failures},
-    futures::CircuitBreaker,
-};
+use failsafe::{StateMachine, backoff, failure_policy, futures::CircuitBreaker};
 pub use processor::VideoProcessor;
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
@@ -14,8 +9,12 @@ use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use crate::{
-    config::WorkerConfig, domain::UploadContentTypeError, file_transfer::FileTransferError,
-    media_probe::FfprobeError, media_transcoder::TranscoderError, repository::VideoRepository,
+    config::WorkerConfig,
+    domain::{UploadContentTypeError, VideoStatus},
+    file_transfer::FileTransferError,
+    media_probe::FfprobeError,
+    media_transcoder::TranscoderError,
+    repository::VideoRepository,
     storage::R2StorageError,
 };
 
@@ -57,37 +56,53 @@ pub enum WorkerError {
 }
 
 // Type alias for the specific failsafe state machine we are using
-type WorkerCircuitBreaker = StateMachine<ConsecutiveFailures<Exponential>, ()>;
+type WorkerCircuitBreaker =
+    StateMachine<failure_policy::ConsecutiveFailures<backoff::Exponential>, ()>;
 
 /// Worker module responsible for background tasks like video processing and cleanup of stale jobs.
 pub struct Worker {
     /// Receiver for video processing jobs sent from the API when uploads are completed.
     rx: mpsc::Receiver<Ulid>,
+    /// Sender to requeue jobs if necessary (e.g., after circuit breaker rejection).
+    tx: mpsc::Sender<Ulid>,
     /// Core processor that encapsulates the logic for handling video processing steps like probing, transmuxing, and transcoding.
     processor: VideoProcessor,
+    /// Repository for updating video statuses and metadata during processing and cleanup.
+    repository: Arc<dyn VideoRepository>,
     /// Semaphore to limit concurrent processing jobs and prevent resource exhaustion.
     semaphore: Arc<Semaphore>,
     /// Circuit breaker to protect infrastructure from cascading failures.
     circuit_breaker: Arc<WorkerCircuitBreaker>,
+    /// Configuration for the worker.
+    config: WorkerConfig,
 }
 
 impl Worker {
-    pub fn new(rx: mpsc::Receiver<Ulid>, processor: VideoProcessor, config: WorkerConfig) -> Self {
-        // Configure the Circuit Breaker:
-        // Use values from config for failure threshold and recovery delays.
+    pub fn new(
+        rx: mpsc::Receiver<Ulid>,
+        tx: mpsc::Sender<Ulid>,
+        processor: VideoProcessor,
+        repository: Arc<dyn VideoRepository>,
+        config: WorkerConfig,
+    ) -> Self {
+        // Configure the Circuit Breaker with a policy of tripping after a certain number of consecutive failures
         let backoff = failsafe::backoff::exponential(
             Duration::from_secs(config.circuit_breaker_min_recovery_secs),
             Duration::from_secs(config.circuit_breaker_max_recovery_secs),
         );
-        let policy = consecutive_failures(config.circuit_breaker_failure_threshold, backoff);
+        let policy =
+            failure_policy::consecutive_failures(config.circuit_breaker_failure_threshold, backoff);
 
         let circuit_breaker = Arc::new(failsafe::Config::new().failure_policy(policy).build());
 
         Self {
             rx,
+            tx,
             processor,
+            repository,
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_transcodes)),
             circuit_breaker,
+            config,
         }
     }
 
@@ -95,6 +110,7 @@ impl Worker {
     pub async fn run_worker_loop(&mut self, shutdown_token: CancellationToken) {
         tracing::info!("worker loop started");
         let mut active_jobs = tokio::task::JoinSet::new();
+        let tx = self.tx.clone();
 
         loop {
             tokio::select! {
@@ -111,6 +127,9 @@ impl Worker {
                     let permit = self.semaphore.clone().acquire_owned().await.unwrap();
                     let processor = self.processor.clone();
                     let breaker = self.circuit_breaker.clone();
+                    let tx_requeue = tx.clone();
+                    let requeue_delay = self.config.job_requeue_delay_secs;
+                    let repository = Arc::clone(&self.repository);
 
                     active_jobs.spawn(async move {
                         let _permit = permit;
@@ -128,14 +147,19 @@ impl Worker {
                                 // The breaker is OPEN. R2 or Postgres is likely down.
                                 tracing::error!(%ulid, "Circuit breaker OPEN: Job rejected to protect infrastructure");
 
-                                // TODO: consider implementing a retry mechanism here
+                                tokio::time::sleep(Duration::from_secs(requeue_delay)).await;
+                                if let Err(e) = tx_requeue.send(ulid).await {
+                                    tracing::error!(%ulid, error = %e, "Failed to re-queue rejected job");
+                                }
                             }
                             Err(failsafe::Error::Inner(e)) => {
                                 // The job ran, but failed (e.g., FFmpeg crashed, or out of retries).
-                                // The breaker records this failure.
                                 tracing::error!(%ulid, error = %e, "Job failed");
 
-                                // TODO: consider additional error handling or alerting here for failed jobs
+                                // Mark the job as failed in db
+                                if let Err(e) = repository.update_status(ulid, VideoStatus::Failed).await {
+                                    tracing::error!(%ulid, error = %e, "Failed to mark job as failed in database");
+                                }
                             }
                         }
                     });

@@ -61,6 +61,8 @@ pub struct WorkerConfig {
     pub circuit_breaker_min_recovery_secs: u64,
     /// Maximum recovery delay in seconds for the circuit breaker.
     pub circuit_breaker_max_recovery_secs: u64,
+    /// Delay in seconds before requeuing a job that was rejected by the circuit breaker.
+    pub job_requeue_delay_secs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +148,7 @@ impl Config {
                     "CIRCUIT_BREAKER_MAX_RECOVERY_SECS",
                     60u64,
                 )?,
+                job_requeue_delay_secs: parse(map, "JOB_REQUEUE_DELAY_SECS", 5u64)?,
             },
             server: ServerConfig {
                 host: parse(map, "SERVER_HOST", IpAddr::V4(Ipv4Addr::UNSPECIFIED))?,
