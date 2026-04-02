@@ -84,7 +84,8 @@ async fn main() -> Result<(), AppError> {
         .read_timeout(Duration::from_secs(config.worker.http_read_timeout_secs))
         .build()?;
 
-    let file_transfer: Arc<dyn FileTransfer> = Arc::new(HttpFileTransfer::new(http_client));
+    let file_transfer: Arc<dyn FileTransfer> =
+        Arc::new(HttpFileTransfer::new(http_client, config.worker.clone()));
 
     // Create a channel for communicating upload completion events to the worker.
     let (worker_tx, worker_rx) =

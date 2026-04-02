@@ -352,6 +352,9 @@ mod tests {
             http_read_timeout_secs: 30,
             transmux_timeout_secs: 300,
             transcode_timeout_secs: 1800,
+            file_transfer_retry_min_delay_ms: 50,
+            file_transfer_retry_max_delay_ms: 100,
+            file_transfer_retry_max_times: 3,
         }
     }
 
