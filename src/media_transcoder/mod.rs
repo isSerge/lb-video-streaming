@@ -98,6 +98,10 @@ impl MediaTranscoder for Ffmpeg {
     ) -> Result<PathBuf, TranscoderError> {
         let manifest_path = output_dir.join("manifest.m3u8");
 
+        // Note: This is a very basic ffmpeg command for HLS transcoding. In a production system, that would include:
+        // - More sophisticated error handling (parsing ffmpeg stderr for specific error conditions and handling them accordingly)
+        // - Configurable video/audio encoding parameters (codecs, bitrates, filters)
+        // - Etc.
         let mut cmd = Command::new(&self.command);
         cmd.arg("-y") // overwrite output if it exists
             .arg("-nostdin") // disable interaction
