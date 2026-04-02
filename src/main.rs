@@ -5,6 +5,7 @@ mod file_transfer;
 mod media_probe;
 mod media_transcoder;
 mod repository;
+mod shared;
 mod storage;
 mod worker;
 
@@ -92,7 +93,6 @@ async fn main() -> Result<(), AppError> {
         tokio::sync::mpsc::channel(config.worker.worker_channel_buffer_size);
 
     // Spawn worker tasks for processing uploads and sweeping zombies.
-
     let processor = VideoProcessor::new(
         Arc::clone(&video_repository),
         Arc::clone(&storage),
@@ -109,11 +109,11 @@ async fn main() -> Result<(), AppError> {
         config.worker.clone(),
     );
     let worker_video_repo_clone = Arc::clone(&video_repository);
-    // TODO: use handlers during graceful shutdown to ensure all tasks are properly stopped and no jobs are lost
     let worker_token_clone = cancel_token.clone();
     let worker_handle =
         tokio::spawn(async move { worker.run_worker_loop(worker_token_clone).await });
 
+    // Spawn a separate task for periodic cleanup of zombie jobs and expired pending uploads.
     let cleanup_token_clone = cancel_token.clone();
     let cleanup_handle = tokio::spawn(async move {
         Worker::run_cleanup(

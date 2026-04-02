@@ -310,30 +310,17 @@ impl VideoProcessor {
 mod tests {
     use super::*;
     use crate::{
-        domain::{AudioCodec, ContainerFormat, MediaMetadata, RawUploadKey, VideoCodec},
+        domain::{AudioCodec, ContainerFormat, MediaMetadata, VideoCodec},
         file_transfer::{FileTransferError, port::MockFileTransfer},
         media_probe::port::MockMediaProbe,
         media_transcoder::{TranscoderError, port::MockMediaTranscoder},
         repository::port::MockVideoRepository,
+        shared::video_test_utils::VideoRecordBuilder,
         storage::port::MockStorage,
     };
     use mockall::predicate::*;
     use std::path::Path;
     use url::Url;
-
-    // TODO: consider using builder pattern and move to common test utils
-    fn mock_video_record(ulid: Ulid, transmux_required: bool) -> VideoRecord {
-        VideoRecord {
-            ulid,
-            status: VideoStatus::PendingUpload,
-            raw_key: RawUploadKey::from(ulid),
-            transmux_key: None,
-            manifest_key: None,
-            browser_compatible: false,
-            transmux_required,
-            transcode_required: true,
-        }
-    }
 
     fn dummy_url() -> Url {
         Url::parse("https://example.com/dummy").unwrap()
@@ -394,7 +381,9 @@ mod tests {
         let mut repo = MockVideoRepository::new();
 
         // Return a record where transmux_required = true
-        let record = mock_video_record(ulid, true);
+        let record = VideoRecordBuilder::new(ulid)
+            .transmux_required(true)
+            .build();
 
         // Expect status update to "transmuxing"
         repo.expect_update_status()
@@ -499,9 +488,13 @@ mod tests {
         let mut repo = MockVideoRepository::new();
 
         // Return a record where transmux_required = true
-        repo.expect_find_video_by_ulid()
-            .once()
-            .returning(move |_| Ok(Some(mock_video_record(ulid, true))));
+        repo.expect_find_video_by_ulid().once().returning(move |_| {
+            Ok(Some(
+                VideoRecordBuilder::new(ulid)
+                    .transmux_required(true)
+                    .build(),
+            ))
+        });
 
         // Expect status update to "transmuxing" before probing
         repo.expect_update_status()
@@ -559,10 +552,11 @@ mod tests {
         let manifest_key_clone = manifest_key.clone();
 
         let mut repo = MockVideoRepository::new();
-        let mut record = mock_video_record(ulid, false);
         // Simulate a transmuxed file exists to trigger cleanup
         let transmux_key = TransmuxKey::new(ulid, ContainerFormat::Mp4);
-        record.transmux_key = Some(transmux_key.clone());
+        let record = VideoRecordBuilder::new(ulid)
+            .transmux_key(Some(transmux_key.clone()))
+            .build();
 
         // Expect status update to "transcoding" before starting
         repo.expect_update_status()
@@ -727,7 +721,7 @@ mod tests {
             dummy_worker_config(),
         );
 
-        let record = mock_video_record(ulid, false);
+        let record = VideoRecordBuilder::new(ulid).build();
         let result = processor.run_hls_transcode(ulid, &record, None).await;
 
         assert!(matches!(
