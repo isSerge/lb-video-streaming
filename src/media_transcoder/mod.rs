@@ -1,7 +1,10 @@
 pub mod port;
 pub use port::MediaTranscoder;
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::process::Command;
 
@@ -21,6 +24,9 @@ pub enum TranscoderError {
 
     #[error("transcode failed: {stderr}")]
     TranscodeFailed { stderr: String },
+
+    #[error("operation timed out after {0:?}")]
+    Timeout(Duration),
 }
 
 /// Wrapper around the `ffmpeg` binary.
@@ -51,20 +57,27 @@ impl MediaTranscoder for Ffmpeg {
         input_path: &Path,
         target_container: ContainerFormat,
         output_path: &Path,
+        timeout: Duration,
     ) -> Result<(), TranscoderError> {
         // Validate that the target container is supported for transmuxing before running ffmpeg.
         if !target_container.is_transmux_target() {
             return Err(TranscoderError::UnsupportedContainer(target_container));
         }
 
-        let output = Command::new(&self.command)
+        let mut cmd = Command::new(&self.command);
+        cmd.arg("-y") // overwrite output if it exists
+            .arg("-nostdin") // disable interaction
             .arg("-i")
             .arg(input_path.as_os_str())
             .arg("-c")
             .arg("copy")
-            .arg(output_path.as_os_str())
-            .output()
-            .await?;
+            .arg(output_path.as_os_str());
+
+        cmd.kill_on_drop(true); // Ensure ffmpeg is killed if the future is dropped (e.g. on timeout)
+
+        let output = tokio::time::timeout(timeout, cmd.output())
+            .await
+            .map_err(|_| TranscoderError::Timeout(timeout))??;
 
         tracing::info!(status = %output.status, "ffmpeg transmux exited");
 
@@ -81,12 +94,15 @@ impl MediaTranscoder for Ffmpeg {
         &self,
         input_path: &Path,
         output_dir: &Path,
+        timeout: Duration,
     ) -> Result<PathBuf, TranscoderError> {
         let manifest_path = output_dir.join("manifest.m3u8");
 
-        // TODO: double check args and fine tune if necessary
         let mut cmd = Command::new(&self.command);
-        cmd.arg("-i").arg(input_path.as_os_str());
+        cmd.arg("-y") // overwrite output if it exists
+            .arg("-nostdin") // disable interaction
+            .arg("-i")
+            .arg(input_path.as_os_str());
 
         // Video filtering: scale to 720p (preserve aspect ratio, even width)
         cmd.arg("-vf").arg("scale=-2:720");
@@ -107,7 +123,11 @@ impl MediaTranscoder for Ffmpeg {
             .arg(output_dir.join("segment_%03d.ts").as_os_str());
         cmd.arg(&manifest_path);
 
-        let output = cmd.output().await?;
+        cmd.kill_on_drop(true); // Ensure ffmpeg is killed if the future is dropped (e.g. on timeout)
+
+        let output = tokio::time::timeout(timeout, cmd.output())
+            .await
+            .map_err(|_| TranscoderError::Timeout(timeout))??;
 
         tracing::info!(status = %output.status, "ffmpeg HLS transcode exited");
 

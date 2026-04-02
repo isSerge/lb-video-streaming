@@ -26,9 +26,13 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
+    /// Maximum number of videos that can be transcoded in parallel.
     pub max_concurrent_transcodes: usize,
+    /// Root directory for the worker to store temporary files during processing.
     pub temp_dir: PathBuf,
+    /// Number of segments to upload in parallel when uploading HLS outputs to storage.
     pub segment_upload_concurrency: usize,
+    /// Interval in seconds at which the worker sends heartbeat logs during transcoding to indicate progress.
     pub transcode_heartbeat_interval_secs: u64,
     /// Duration in seconds after which pending uploads are considered "zombies" and eligible for cleanup.
     pub zombie_timeout_secs: u64,
@@ -40,6 +44,10 @@ pub struct WorkerConfig {
     pub http_connect_timeout_secs: u64,
     /// Timeout in seconds for reading a chunk of data during file transfers.
     pub http_read_timeout_secs: u64,
+    /// Timeout in seconds for the transmuxing process.
+    pub transmux_timeout_secs: u64,
+    /// Timeout in seconds for the HLS transcoding process.
+    pub transcode_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +104,8 @@ impl Config {
                 worker_channel_buffer_size: parse(map, "WORKER_CHANNEL_BUFFER_SIZE", 100usize)?,
                 http_connect_timeout_secs: parse(map, "HTTP_CONNECT_TIMEOUT_SECS", 10u64)?,
                 http_read_timeout_secs: parse(map, "HTTP_READ_TIMEOUT_SECS", 30u64)?,
+                transmux_timeout_secs: parse(map, "TRANSMUX_TIMEOUT_SECS", 300u64)?,
+                transcode_timeout_secs: parse(map, "TRANSCODE_TIMEOUT_SECS", 1800u64)?,
             },
             server: ServerConfig {
                 host: parse(map, "SERVER_HOST", IpAddr::V4(Ipv4Addr::UNSPECIFIED))?,

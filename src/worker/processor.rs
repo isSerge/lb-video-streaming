@@ -104,7 +104,12 @@ impl VideoProcessor {
 
         // Perform transmuxing using the media transcoder
         self.transcoder
-            .transmux(&raw_path, target_container, &output_path)
+            .transmux(
+                &raw_path,
+                target_container,
+                &output_path,
+                Duration::from_secs(self.config.transmux_timeout_secs),
+            )
             .await?;
 
         // Upload transmuxed file back to storage and update video record with new key and status
@@ -186,7 +191,11 @@ impl VideoProcessor {
         // Run the HLS transcoding process, which generates segments and manifest in the output directory.
         let transcode_result = self
             .transcoder
-            .hls_transcode(&input_path, &output_dir)
+            .hls_transcode(
+                &input_path,
+                &output_dir,
+                Duration::from_secs(self.config.transcode_timeout_secs),
+            )
             .await;
 
         // Kill the keep-alive loop immediately after transcoding finishes, whether it succeeded or failed, to avoid unnecessary database updates.
@@ -339,8 +348,10 @@ mod tests {
             zombie_timeout_secs: 7200.try_into().unwrap(),
             zombie_sweep_interval_secs: 3600.try_into().unwrap(),
             worker_channel_buffer_size: 100,
-            http_connect_timeout_secs: 10.try_into().unwrap(),
-            http_read_timeout_secs: 30.try_into().unwrap(),
+            http_connect_timeout_secs: 10,
+            http_read_timeout_secs: 30,
+            transmux_timeout_secs: 300,
+            transcode_timeout_secs: 1800,
         }
     }
 
@@ -448,14 +459,15 @@ mod tests {
         transcoder
             .expect_transmux()
             .withf(
-                |in_path: &Path, target: &ContainerFormat, out_path: &Path| {
+                |in_path: &Path, target: &ContainerFormat, out_path: &Path, timeout: &Duration| {
                     in_path.ends_with("input")
                         && *target == ContainerFormat::Mp4
                         && out_path.ends_with("output.mp4")
+                        && timeout.as_secs() == 300
                 },
             )
             .once()
-            .returning(|_, _, _| Ok(()));
+            .returning(|_, _, _, _| Ok(()));
 
         let processor = VideoProcessor::new(
             Arc::new(repo),
@@ -628,11 +640,11 @@ mod tests {
         // HLS transcode should be called
         transcoder
             .expect_hls_transcode()
-            .withf(|in_path: &Path, out_dir: &Path| {
-                in_path.ends_with("input") && out_dir.ends_with("hls")
+            .withf(|in_path: &Path, out_dir: &Path, timeout: &Duration| {
+                in_path.ends_with("input") && out_dir.ends_with("hls") && timeout.as_secs() == 1800
             })
             .once()
-            .returning(|_, out_dir| {
+            .returning(|_, out_dir, _| {
                 let manifest = out_dir.join("manifest.m3u8");
                 std::fs::create_dir_all(out_dir).unwrap();
                 std::fs::write(&manifest, "dummy manifest").unwrap();
@@ -688,11 +700,14 @@ mod tests {
         let mut transcoder = MockMediaTranscoder::new();
 
         // Simulate an FFmpeg failure during HLS transcoding by returning an error from the mock transcoder.
-        transcoder.expect_hls_transcode().once().returning(|_, _| {
-            Err(TranscoderError::TranscodeFailed {
-                stderr: "boom".into(),
-            })
-        });
+        transcoder
+            .expect_hls_transcode()
+            .once()
+            .returning(|_, _, _| {
+                Err(TranscoderError::TranscodeFailed {
+                    stderr: "boom".into(),
+                })
+            });
 
         // The pipeline MUST halt here. Storage upload and DB finalize should NOT be called.
 
