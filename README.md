@@ -13,6 +13,24 @@ A private, horizontally scalable video streaming service built with Rust, Svelte
 - **FFmpeg & FFprobe** installed and available in `$PATH`
 - **Cloudflare R2** account
 
+## Repository Layout
+
+```
+src/
+├── api/               # Axum handlers
+├── worker/            # Job orchestration
+├── domain/            # Core types, state machine
+├── repository/        # Postgres adapter
+├── storage/           # R2 adapter
+├── media_probe/       # ffprobe adapter
+├── media_transcoder/  # FFmpeg adapter
+├── file_transfer/     # Resilient HTTP with backoff
+├── config.rs
+└── main.rs
+ui/                    # Svelte frontend
+migrations/            # sqlx migrations
+```
+
 ## Local Development Setup
 
 1. **Database**
@@ -32,15 +50,17 @@ A private, horizontally scalable video streaming service built with Rust, Svelte
 	 ```
 
 2. **Environment Variables**
-   Copy `.env.example` to `.env` and fill in your R2 credentials and DB URL:
-   ```env
-   DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
-   R2_ACCOUNT_ID=...
-   R2_ACCESS_KEY_ID=...
-   R2_SECRET_ACCESS_KEY=...
-   R2_BUCKET_NAME=...
-   PUBLIC_CDN_DOMAIN=https://pub-your-bucket-id.r2.dev
-   ```
+   Copy `.env.example` to `.env` and fill in the mandatory variables:
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | Postgres connection string (`postgres://...`) |
+| `R2_BUCKET_NAME` | S3 bucket name in Cloudflare R2 |
+| `R2_ACCOUNT_ID` | Cloudflare account ID (found in R2 dashboard) |
+| `R2_ACCESS_KEY_ID` | S3 API client access key |
+| `R2_SECRET_ACCESS_KEY` | S3 API client secret key |
+| `PUBLIC_CDN_DOMAIN` | Domain for video delivery (e.g., `https://videos.example.com`) |
+
    *Note: Ensure your R2 bucket has a CORS policy allowing `PUT` and `GET` from `http://localhost:5173`.*
 
 3. **Run the Backend (API + Worker)**
