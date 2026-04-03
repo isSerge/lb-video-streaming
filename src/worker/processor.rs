@@ -83,7 +83,12 @@ impl VideoProcessor {
         let temp_dir = tempfile::Builder::new()
             .prefix(&format!("transmux-{}", ulid))
             .tempdir_in(&self.config.temp_dir)?;
-        let raw_path = temp_dir.path().join("input");
+        // Preserve the file extension from the raw key so ffprobe can disambiguate container formats
+        let input_filename = match record.raw_key.extension() {
+            Some(ext) => format!("input.{}", ext),
+            None => "input".to_string(),
+        };
+        let raw_path = temp_dir.path().join(input_filename);
 
         // Download raw file from storage to local temp path for processing
         let raw_url = self.storage.create_download_url(&record.raw_key).await?;
@@ -163,7 +168,12 @@ impl VideoProcessor {
             None => self.storage.create_download_url(&record.raw_key).await,
         }?;
 
-        let input_path = temp_dir.path().join("input");
+        // Preserve the file extension so ffprobe can disambiguate container formats
+        let input_filename = match record.raw_key.extension() {
+            Some(ext) => format!("input.{}", ext),
+            None => "input".to_string(),
+        };
+        let input_path = temp_dir.path().join(input_filename);
         tracing::info!(url = %download_url, "downloading file for HLS transcoding");
         self.file_transfer
             .download(download_url, &input_path)

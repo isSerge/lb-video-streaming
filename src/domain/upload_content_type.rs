@@ -27,6 +27,23 @@ impl Deref for UploadContentType {
     }
 }
 
+impl UploadContentType {
+    /// Returns a file extension hint derived from the MIME type.
+    /// Used to disambiguate container formats in ffprobe output (e.g. "matroska,webm").
+    pub fn to_extension(&self) -> &'static str {
+        match (self.0.type_().as_str(), self.0.subtype().as_str()) {
+            ("video", "webm") => "webm",
+            ("video", "mp4") => "mp4",
+            ("video", "quicktime") => "mov",
+            ("video", "x-matroska") => "mkv",
+            ("video", "x-msvideo") => "avi",
+            ("video", "mp2t") => "ts",
+            ("video", "x-flv") => "flv",
+            _ => "bin",
+        }
+    }
+}
+
 impl Default for UploadContentType {
     fn default() -> Self {
         Self(
@@ -119,5 +136,33 @@ mod tests {
                 .to_string()
                 .contains("content_type must be a valid MIME type")
         );
+    }
+
+    #[test]
+    fn to_extension_maps_known_video_types() {
+        let cases = [
+            ("video/webm", "webm"),
+            ("video/mp4", "mp4"),
+            ("video/quicktime", "mov"),
+            ("video/x-matroska", "mkv"),
+            ("video/x-msvideo", "avi"),
+            ("video/mp2t", "ts"),
+            ("video/x-flv", "flv"),
+        ];
+        for (mime, expected_ext) in cases {
+            let ct: UploadContentType = mime.parse().unwrap();
+            assert_eq!(ct.to_extension(), expected_ext, "MIME {mime}");
+        }
+    }
+
+    #[test]
+    fn to_extension_returns_bin_for_unknown_types() {
+        let ct: UploadContentType = "application/octet-stream".parse().unwrap();
+        assert_eq!(ct.to_extension(), "bin");
+    }
+
+    #[test]
+    fn to_extension_returns_bin_for_default() {
+        assert_eq!(UploadContentType::default().to_extension(), "bin");
     }
 }

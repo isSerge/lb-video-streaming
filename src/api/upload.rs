@@ -43,7 +43,7 @@ pub async fn create_upload_url(
     ))?;
 
     let ulid = Ulid::new();
-    let raw_key = RawUploadKey::from(ulid);
+    let raw_key = RawUploadKey::with_extension(ulid, content_type.to_extension());
 
     state
         .video_repository
